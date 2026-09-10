@@ -1,0 +1,29 @@
+# Camera and video input configuration.
+# Keep environment-specific paths and RTSP URLs here instead of hardcoding them in Python.
+
+cameras:
+  # Local sample video used for early pipeline smoke tests.
+  - camera_id: factory-floor-demo
+    name: Factory Floor Demo
+    type: video
+    source: data/samples/factory_floor_demo.mp4
+    loop: true
+
+  # Laptop webcam for local camera testing. OpenCV usually maps the built-in camera to 0.
+  - camera_id: laptop-camera
+    name: Laptop Camera
+    type: webcam
+    source: 0
+    width: 1280
+    height: 720
+    fps: 30
+    loop: false
+
+# Example RTSP camera shape. Do not commit credentials in this file.
+# cameras:
+#   - camera_id: factory-rtsp-01
+#     name: Factory RTSP Camera 01
+#     type: rtsp
+#     source: rtsp://user:password@camera-host/stream
+#     reconnect_seconds: 3
+#     stale_frame_timeout_seconds: 2
