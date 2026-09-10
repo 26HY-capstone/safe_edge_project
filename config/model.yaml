@@ -1,0 +1,35 @@
+# Model runtime configuration.
+# The files under models/ must be real model artifacts, not 0-byte placeholders.
+
+detector:
+  # Local development starts with PyTorch. Jetson deployment should use TensorRT after export.
+  backend: pytorch
+  model_path: models/best.pt
+  device: cpu
+  input_size: 640
+  confidence_threshold: 0.35
+  iou_threshold: 0.45
+
+  # Class IDs must match the trained YOLO model.
+  classes:
+    0: person
+    1: head
+    2: gloves
+    3: helmet
+    4: body
+    5: safety_vest
+    6: forklift
+    7: robot_arm
+    8: conveyor
+    9: harness_body
+
+ppe:
+  # PPE is not intended to run on every full frame. Use periodic or trigger-based ROI inference.
+  refresh_interval_seconds: 5
+  new_worker_immediate_check: true
+  roi_margin_ratio: 0.15
+
+pose:
+  # Pose estimation should be triggered only when a worker is stationary long enough.
+  no_motion_trigger_seconds: 3
+  refresh_interval_seconds: 3

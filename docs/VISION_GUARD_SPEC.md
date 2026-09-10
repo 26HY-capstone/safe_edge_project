@@ -57,7 +57,9 @@ YOLO 기반 Object Detection을 사용한다.
 - helmet
 - head
 - gloves
-- safety harness
+- body
+- safety_vest
+- harness_body
 - 필요 시 safety vest / safety shoes 추가 가능
 
 ## 3. 전체 처리 파이프라인
