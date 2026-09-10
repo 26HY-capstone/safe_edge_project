@@ -7,8 +7,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-TEMP_DEFAULT_VIDEO_PATH = Path(
-    r"../../720Example of Hi-Definition Video Surveillance of a Factory Floor - by CCTVDOC.COM.mp4"
+TEMP_DEFAULT_VIDEO_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "samples" / "factory_floor_demo.mp4"
 )
 VideoInput = str | Path | int
 
