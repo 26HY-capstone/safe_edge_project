@@ -1,0 +1,35 @@
+# 모델 실행값은 backend와 배포 환경에 맞춰 설정한다.
+# class ID는 학습 데이터 라벨 순서와 항상 일치해야 한다.
+
+detector:
+  # backend는 pytorch, onnx, tensorrt 중 실행 환경에 맞게 선택한다.
+  backend: pytorch
+  model_path: models/best.pt
+  device: cpu
+  input_size: 640
+  confidence_threshold: 0.35
+  iou_threshold: 0.45
+
+  # 모델 출력 class ID와 서비스 내부 class 이름의 매핑.
+  classes:
+    0: person
+    1: head
+    2: gloves
+    3: helmet
+    4: body
+    5: safety_vest
+    6: forklift
+    7: robot_arm
+    8: conveyor
+    9: harness_body
+
+ppe:
+  # PPE는 주기 실행 또는 trigger 기반 ROI 추론으로 실행한다.
+  refresh_interval_seconds: 5
+  new_worker_immediate_check: true
+  roi_margin_ratio: 0.15
+
+pose:
+  # 자세 추정은 작업자 정지 상태를 trigger로 사용한다.
+  no_motion_trigger_seconds: 3
+  refresh_interval_seconds: 3

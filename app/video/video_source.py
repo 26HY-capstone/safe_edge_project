@@ -1,3 +1,5 @@
+"""영상 입력을 공통 FramePacket 형식으로 변환하는 모듈."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -7,9 +9,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-TEMP_DEFAULT_VIDEO_PATH = Path(
-    r"C:\work\safe_edge_project\720Example of Hi-Definition Video Surveillance of a Factory Floor - by CCTVDOC.COM.mp4"
+TEMP_DEFAULT_VIDEO_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "samples" / "factory_floor_demo.mp4"
 )
+# 영상 입력은 파일 경로 또는 OpenCV 카메라 번호를 사용한다.
 VideoInput = str | Path | int
 
 

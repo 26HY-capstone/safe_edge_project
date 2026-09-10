@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+"""프레임 단위로 영상 입력과 탐지기를 연결하는 모듈."""
+
+from dataclasses import dataclass, replace
 import time
 
 import cv2
@@ -58,10 +60,10 @@ class FrameProcessor:
                 self.processing_fps,
             )
 
-        frame_packet.frame = frame
+        rendered_packet = replace(frame_packet, frame=frame)
 
         return ProcessedFrame(
-            frame_packet=frame_packet,
+            frame_packet=rendered_packet,
             detections=detections,
             inference_latency_ms=inference_latency_ms,
         )

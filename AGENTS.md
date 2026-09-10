@@ -66,7 +66,7 @@ CCTV / RTSP / Video
 
 ### 현재 테스트 영상
 
-- 저장소에 포함된 테스트 영상은 `720Example of Hi-Definition Video Surveillance of a Factory Floor - by CCTVDOC.COM.mp4`다.
+- 저장소에 포함된 테스트 영상은 `data/samples/factory_floor_demo.mp4`다.
 - `app/video/video_source.py`의 절대 경로는 임시방편이다. `config/cameras.yaml` 구현 후 설정 기반 경로로 교체한다.
 
 ## 4. 반드시 지켜야 하는 아키텍처 규칙

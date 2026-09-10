@@ -1,0 +1,28 @@
+# Zone과 공간 분석 설정.
+# polygon 좌표는 원본 프레임 기준 이미지 픽셀 좌표 [x, y]다.
+
+zones:
+  # 정적 위험구역 polygon.
+  - zone_id: sample-conveyor-danger
+    camera_id: factory-floor-demo
+    zone_type: conveyor_danger
+    polygon:
+      - [120, 400]
+      - [720, 400]
+      - [760, 680]
+      - [100, 680]
+
+robot_arm:
+  # 로봇팔 safety zone은 탐지 bbox를 확장해서 만든다.
+  bbox_margin_px: 40
+  smoothing_frames: 5
+
+forklift:
+  # calibration 적용 전에는 pixel 단위 threshold를 사용한다.
+  static_buffer_px: 120
+  dynamic_lookahead_seconds: 1.5
+  dynamic_buffer_px: 160
+
+worker:
+  # 작업자 위치는 기본적으로 bbox bottom-center를 사용한다.
+  dwell_time_seconds: 1.0
