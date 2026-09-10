@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import time
 
 import cv2
@@ -58,10 +58,10 @@ class FrameProcessor:
                 self.processing_fps,
             )
 
-        frame_packet.frame = frame
+        rendered_packet = replace(frame_packet, frame=frame)
 
         return ProcessedFrame(
-            frame_packet=frame_packet,
+            frame_packet=rendered_packet,
             detections=detections,
             inference_latency_ms=inference_latency_ms,
         )
