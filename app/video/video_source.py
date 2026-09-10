@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 TEMP_DEFAULT_VIDEO_PATH = Path(
-    r"C:\work\safe_edge_project\720Example of Hi-Definition Video Surveillance of a Factory Floor - by CCTVDOC.COM.mp4"
+    r"../../720Example of Hi-Definition Video Surveillance of a Factory Floor - by CCTVDOC.COM.mp4"
 )
 VideoInput = str | Path | int
 
