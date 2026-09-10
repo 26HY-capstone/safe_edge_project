@@ -1,7 +1,7 @@
 # Vision Guard 기능 명세 및 개발 프롬프트
 
-> 문서 상태: Living Specification  
-> 프로젝트명: Vision Guard  
+> 문서 상태: Living Specification
+> 프로젝트명: Vision Guard
 > 캐치프레이즈: 사고말고경고
 
 이 문서는 Vision Guard의 설계·개발에서 가장 중요한 기준으로 사용한다. 요구사항, 아키텍처, 인터페이스, 개발 우선순위 또는 Edge 제약이 변경될 때 이 문서를 함께 갱신한다.

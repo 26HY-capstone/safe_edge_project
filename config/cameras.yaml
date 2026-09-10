@@ -1,15 +1,15 @@
-# Camera and video input configuration.
-# Keep environment-specific paths and RTSP URLs here instead of hardcoding them in Python.
+# 카메라 입력은 코드가 아니라 설정으로 관리한다.
+# RTSP 인증정보는 환경변수나 별도 비밀 설정으로 주입한다.
 
 cameras:
-  # Local sample video used for early pipeline smoke tests.
+  # 로컬 영상 입력.
   - camera_id: factory-floor-demo
     name: Factory Floor Demo
     type: video
     source: data/samples/factory_floor_demo.mp4
     loop: true
 
-  # Laptop webcam for local camera testing. OpenCV usually maps the built-in camera to 0.
+  # 웹캠 입력. OpenCV에서는 기본 카메라가 보통 0번이다.
   - camera_id: laptop-camera
     name: Laptop Camera
     type: webcam
@@ -19,7 +19,7 @@ cameras:
     fps: 30
     loop: false
 
-# Example RTSP camera shape. Do not commit credentials in this file.
+# RTSP 카메라 설정 형식.
 # cameras:
 #   - camera_id: factory-rtsp-01
 #     name: Factory RTSP Camera 01

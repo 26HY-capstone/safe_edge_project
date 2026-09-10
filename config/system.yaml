@@ -1,4 +1,4 @@
-# System-wide runtime settings.
+# 시스템 전체 실행 설정.
 
 system:
   log_level: INFO
@@ -13,7 +13,7 @@ tracking:
   max_lost_frames: 30
 
 risk:
-  # Avoid creating the same event on every frame.
+  # 같은 위험 상황이 반복 저장되지 않도록 cooldown을 둔다.
   event_cooldown_seconds: 5
   warning_distance_px: 150
   critical_distance_px: 80

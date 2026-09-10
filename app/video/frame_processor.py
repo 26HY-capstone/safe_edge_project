@@ -1,3 +1,5 @@
+"""프레임 단위로 영상 입력과 탐지기를 연결하는 모듈."""
+
 from dataclasses import dataclass, replace
 import time
 

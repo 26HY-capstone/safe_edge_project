@@ -1,3 +1,5 @@
+"""객체 탐지 결과와 추론 backend 공통 계약을 정의하는 모듈."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

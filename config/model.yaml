@@ -1,8 +1,8 @@
-# Model runtime configuration.
-# The files under models/ must be real model artifacts, not 0-byte placeholders.
+# 모델 실행값은 backend와 배포 환경에 맞춰 설정한다.
+# class ID는 학습 데이터 라벨 순서와 항상 일치해야 한다.
 
 detector:
-  # Local development starts with PyTorch. Jetson deployment should use TensorRT after export.
+  # backend는 pytorch, onnx, tensorrt 중 실행 환경에 맞게 선택한다.
   backend: pytorch
   model_path: models/best.pt
   device: cpu
@@ -10,7 +10,7 @@ detector:
   confidence_threshold: 0.35
   iou_threshold: 0.45
 
-  # Class IDs must match the trained YOLO model.
+  # 모델 출력 class ID와 서비스 내부 class 이름의 매핑.
   classes:
     0: person
     1: head
@@ -24,12 +24,12 @@ detector:
     9: harness_body
 
 ppe:
-  # PPE is not intended to run on every full frame. Use periodic or trigger-based ROI inference.
+  # PPE는 주기 실행 또는 trigger 기반 ROI 추론으로 실행한다.
   refresh_interval_seconds: 5
   new_worker_immediate_check: true
   roi_margin_ratio: 0.15
 
 pose:
-  # Pose estimation should be triggered only when a worker is stationary long enough.
+  # 자세 추정은 작업자 정지 상태를 trigger로 사용한다.
   no_motion_trigger_seconds: 3
   refresh_interval_seconds: 3
