@@ -68,3 +68,5 @@ data/datasets/
 data/logs/
 data/snapshots/
 data/events.db
+
+*.pdf
