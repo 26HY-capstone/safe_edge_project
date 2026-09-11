@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import time
 
 import cv2
+import numpy as np
 
 from app.video.video_source import VideoSource, FramePacket
 from app.inference.detector import Detector, Detection
@@ -12,6 +13,7 @@ class ProcessedFrame:
     frame_packet: FramePacket
     detections: list[Detection]
     inference_latency_ms: float
+    rendered_frame: np.ndarray | None
 
 
 class FrameProcessor:
@@ -34,41 +36,52 @@ class FrameProcessor:
         if frame_packet is None:
             return None
 
-        frame = frame_packet.frame.copy()
+        original_frame = frame_packet.frame
 
         inference_start = time.perf_counter()
-        detections = self.detector.detect(frame)
+        detections = self.detector.detect(original_frame)
         inference_end = time.perf_counter()
 
-        inference_latency_ms = (inference_end - inference_start) * 1000.0
+        inference_latency_ms = (
+            inference_end - inference_start
+        ) * 1000.0
 
         if inference_latency_ms > 0:
-            self.processing_fps = 1000.0 / inference_latency_ms
+            self.processing_fps = (
+                1000.0 / inference_latency_ms
+            )
         else:
             self.processing_fps = 0.0
 
-        if self.draw_bbox:
-            self._draw_detections(frame, detections)
+        rendered_frame = None
 
-        if self.draw_metrics:
-            self._draw_metrics(
-                frame,
-                frame_packet.fps,
-                inference_latency_ms,
-                self.processing_fps,
-            )
+        if self.draw_bbox or self.draw_metrics:
+            rendered_frame = original_frame.copy()
 
-        frame_packet.frame = frame
+            if self.draw_bbox:
+                self._draw_detections(
+                    frame=rendered_frame,
+                    detections=detections,
+                )
+
+            if self.draw_metrics:
+                self._draw_metrics(
+                    frame=rendered_frame,
+                    source_fps=frame_packet.fps,
+                    inference_latency_ms=inference_latency_ms,
+                    processing_fps=self.processing_fps,
+                )
 
         return ProcessedFrame(
             frame_packet=frame_packet,
             detections=detections,
             inference_latency_ms=inference_latency_ms,
+            rendered_frame=rendered_frame,
         )
 
     def _draw_detections(
         self,
-        frame,
+        frame: np.ndarray,
         detections: list[Detection],
     ) -> None:
         frame_height, frame_width = frame.shape[:2]
@@ -89,7 +102,10 @@ class FrameProcessor:
                 2,
             )
 
-            label = f"{detection.class_name} {detection.confidence:.2f}"
+            label = (
+                f"{detection.class_name} "
+                f"{detection.confidence:.2f}"
+            )
 
             cv2.putText(
                 frame,
@@ -103,7 +119,7 @@ class FrameProcessor:
 
     def _draw_metrics(
         self,
-        frame,
+        frame: np.ndarray,
         source_fps: float,
         inference_latency_ms: float,
         processing_fps: float,
