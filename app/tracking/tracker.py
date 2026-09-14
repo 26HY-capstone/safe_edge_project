@@ -29,6 +29,7 @@ class TrackerConfig:
     frame_rate: int = 30
 
     def __post_init__(self) -> None:
+        """추적 threshold와 frame 설정이 유효한 범위인지 검증한다."""
         if not 0.0 <= self.track_threshold <= 1.0:
             raise ValueError("track_threshold must be between 0 and 1")
         if not 0.0 <= self.match_threshold <= 1.0:
@@ -58,14 +59,17 @@ class Tracker(ABC):
         detections: list[Detection],
         frame_packet: FramePacket,
     ) -> list[TrackedObject]:
+        """현재 프레임의 Detection 목록을 track ID가 붙은 객체 목록으로 변환한다."""
         raise NotImplementedError
 
     def reset(self) -> None:
+        """tracker 내부 상태를 초기화한다."""
         return None
 
 
 class SimpleTracker(Tracker):
     def __init__(self, config: TrackerConfig | None = None) -> None:
+        """IoU 기반 기본 tracker 상태를 생성한다."""
         self.config = config or TrackerConfig()
         self._next_track_id = 1
         self._tracks: dict[int, _TrackState] = {}
@@ -75,6 +79,7 @@ class SimpleTracker(Tracker):
         detections: list[Detection],
         frame_packet: FramePacket,
     ) -> list[TrackedObject]:
+        """Detection을 기존 track과 매칭하거나 새 track으로 등록한다."""
         # 낮은 confidence detection은 track 생성과 갱신 대상에서 제외된다.
         # 일시적인 오탐이 위험 판단까지 전파되는 상황을 줄이기 위한 필터다.
         candidates = [
@@ -115,10 +120,12 @@ class SimpleTracker(Tracker):
         return tracked_objects
 
     def reset(self) -> None:
+        """track ID 시퀀스와 활성 track 상태를 초기화한다."""
         self._next_track_id = 1
         self._tracks.clear()
 
     def _allocate_track_id(self) -> int:
+        """새 객체에 사용할 track ID를 발급한다."""
         track_id = self._next_track_id
         self._next_track_id += 1
         return track_id
@@ -128,6 +135,7 @@ class SimpleTracker(Tracker):
         detection: Detection,
         excluded_track_ids: set[int],
     ) -> int | None:
+        """동일 class의 활성 track 중 IoU가 가장 높은 track ID를 찾는다."""
         best_track_id = None
         best_iou = 0.0
 
@@ -151,6 +159,7 @@ class SimpleTracker(Tracker):
         matched_track_ids: set[int],
         frame_index: int,
     ) -> None:
+        """현재 프레임에서 매칭되지 않은 track의 lost frame 수를 갱신한다."""
         expired_track_ids: list[int] = []
 
         for track_id, state in self._tracks.items():
@@ -180,6 +189,7 @@ class SimpleTracker(Tracker):
 
     @staticmethod
     def _to_tracked_object(state: _TrackState) -> TrackedObject:
+        """내부 track 상태를 외부 모듈에 전달할 표준 객체로 변환한다."""
         return TrackedObject(
             track_id=state.track_id,
             class_id=state.class_id,
@@ -193,16 +203,19 @@ class SimpleTracker(Tracker):
 
 
 def _bbox_center(bbox: BBox) -> Point:
+    """bbox의 중심점을 계산한다."""
     x1, y1, x2, y2 = bbox
     return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
 
 
 def _bbox_bottom_center(bbox: BBox) -> Point:
+    """작업자 위치 기준으로 사용하는 bbox 하단 중심점을 계산한다."""
     x1, _, x2, y2 = bbox
     return ((x1 + x2) / 2.0, y2)
 
 
 def _bbox_iou(first: BBox, second: BBox) -> float:
+    """두 bbox의 IoU를 계산한다."""
     first_x1, first_y1, first_x2, first_y2 = first
     second_x1, second_y1, second_x2, second_y2 = second
 
