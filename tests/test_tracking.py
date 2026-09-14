@@ -8,6 +8,7 @@ from app.tracking.tracker import (
     ByteTrackTracker,
     SimpleTracker,
     TrackerConfig,
+    create_tracker_from_system_config,
 )
 from app.video.video_source import FramePacket
 
@@ -144,3 +145,35 @@ def test_byte_track_tracker_keeps_track_id_for_overlapping_detection(
     assert first_tracks[0].track_id == second_tracks[0].track_id
     assert second_tracks[0].class_name == "person"
     assert second_tracks[0].timestamp == 1.0
+
+
+def test_create_tracker_from_system_config_uses_yaml_values(tmp_path) -> None:
+    config_path = tmp_path / "system.yaml"
+    config_path.write_text(
+        """
+tracking:
+  tracker_type: simple
+  track_threshold: 0.7
+  low_track_threshold: 0.2
+  new_track_threshold: 0.7
+  match_threshold: 0.4
+  track_buffer: 12
+  fuse_score: false
+performance:
+  target_fps: 15
+""",
+        encoding="utf-8",
+    )
+
+    tracker = create_tracker_from_system_config(config_path)
+
+    assert isinstance(tracker, SimpleTracker)
+    assert tracker.config == TrackerConfig(
+        track_threshold=0.7,
+        low_track_threshold=0.2,
+        new_track_threshold=0.7,
+        match_threshold=0.4,
+        track_buffer=12,
+        frame_rate=15,
+        fuse_score=False,
+    )

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
+import yaml
 
 from app.inference.detector import BBox, Detection, Point
 from app.video.video_source import FramePacket
@@ -272,6 +276,75 @@ class ByteTrackTracker(Tracker):
     def reset(self) -> None:
         """ByteTrack 내부의 활성, lost, removed track 상태를 초기화한다."""
         self._tracker.reset()
+
+
+def create_tracker_from_system_config(
+    config_path: str | Path = "config/system.yaml",
+) -> Tracker:
+    """system.yaml의 tracking 설정으로 tracker 구현체를 생성한다."""
+    with Path(config_path).open("r", encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file) or {}
+
+    if not isinstance(config, Mapping):
+        raise ValueError("system config must be a mapping")
+
+    tracking_config = config.get("tracking", {})
+    performance_config = config.get("performance", {})
+    if not isinstance(tracking_config, Mapping):
+        raise ValueError("tracking config must be a mapping")
+    if not isinstance(performance_config, Mapping):
+        raise ValueError("performance config must be a mapping")
+
+    tracker_type = str(tracking_config.get("tracker_type", "simple")).lower()
+    tracker_config = _tracker_config_from_mapping(
+        tracking_config=tracking_config,
+        performance_config=performance_config,
+    )
+
+    if tracker_type == "bytetrack":
+        return ByteTrackTracker(tracker_config)
+    if tracker_type == "simple":
+        return SimpleTracker(tracker_config)
+    raise ValueError(f"Unsupported tracker_type: {tracker_type}")
+
+
+def _tracker_config_from_mapping(
+    tracking_config: Mapping[str, Any],
+    performance_config: Mapping[str, Any],
+) -> TrackerConfig:
+    """YAML 설정값을 TrackerConfig 데이터 계약으로 변환한다."""
+    track_buffer = tracking_config.get(
+        "track_buffer",
+        tracking_config.get("max_lost_frames", TrackerConfig.track_buffer),
+    )
+    frame_rate = tracking_config.get(
+        "frame_rate",
+        performance_config.get("target_fps", TrackerConfig.frame_rate),
+    )
+
+    return TrackerConfig(
+        track_threshold=float(
+            tracking_config.get("track_threshold", TrackerConfig.track_threshold)
+        ),
+        low_track_threshold=float(
+            tracking_config.get(
+                "low_track_threshold",
+                TrackerConfig.low_track_threshold,
+            )
+        ),
+        new_track_threshold=float(
+            tracking_config.get(
+                "new_track_threshold",
+                TrackerConfig.new_track_threshold,
+            )
+        ),
+        match_threshold=float(
+            tracking_config.get("match_threshold", TrackerConfig.match_threshold)
+        ),
+        track_buffer=int(track_buffer),
+        frame_rate=int(frame_rate),
+        fuse_score=bool(tracking_config.get("fuse_score", TrackerConfig.fuse_score)),
+    )
 
 
 def _bbox_center(bbox: BBox) -> Point:
