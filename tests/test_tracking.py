@@ -1,9 +1,14 @@
 """객체 추적과 track ID 유지를 검증하는 테스트."""
 
 import numpy as np
+import pytest
 
 from app.inference.detector import Detection
-from app.tracking.tracker import SimpleTracker, TrackerConfig
+from app.tracking.tracker import (
+    ByteTrackTracker,
+    SimpleTracker,
+    TrackerConfig,
+)
 from app.video.video_source import FramePacket
 
 
@@ -92,3 +97,50 @@ def test_simple_tracker_reset_restarts_track_ids() -> None:
 
     assert first_tracks[0].track_id == 1
     assert second_tracks[0].track_id == 1
+
+
+def test_byte_track_tracker_keeps_track_id_for_overlapping_detection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("YOLO_CONFIG_DIR", str(tmp_path / "ultralytics"))
+    pytest.importorskip("ultralytics")
+    pytest.importorskip("lap")
+
+    tracker = ByteTrackTracker(
+        TrackerConfig(
+            track_threshold=0.5,
+            low_track_threshold=0.1,
+            new_track_threshold=0.5,
+            match_threshold=0.8,
+        )
+    )
+
+    first_tracks = tracker.update(
+        detections=[
+            Detection(
+                class_id=0,
+                class_name="person",
+                confidence=0.9,
+                bbox=(10.0, 10.0, 40.0, 60.0),
+            )
+        ],
+        frame_packet=_frame_packet(frame_index=0, timestamp=0.0),
+    )
+    second_tracks = tracker.update(
+        detections=[
+            Detection(
+                class_id=0,
+                class_name="person",
+                confidence=0.88,
+                bbox=(12.0, 12.0, 42.0, 62.0),
+            )
+        ],
+        frame_packet=_frame_packet(frame_index=1, timestamp=1.0),
+    )
+
+    assert len(first_tracks) == 1
+    assert len(second_tracks) == 1
+    assert first_tracks[0].track_id == second_tracks[0].track_id
+    assert second_tracks[0].class_name == "person"
+    assert second_tracks[0].timestamp == 1.0
