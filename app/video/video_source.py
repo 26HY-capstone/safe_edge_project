@@ -12,7 +12,7 @@ import numpy as np
 TEMP_DEFAULT_VIDEO_PATH = (
     Path(__file__).resolve().parents[2] / "data" / "samples" / "factory_floor_demo.mp4"
 )
-# OpenCV는 파일 경로와 카메라 번호를 같은 VideoCapture 인터페이스로 처리한다.
+# OpenCV VideoCapture 입력: 파일 경로 또는 카메라 번호.
 VideoInput = str | Path | int
 
 
@@ -22,9 +22,9 @@ class VideoSourceError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class FramePacket:
-    # 프레임과 함께 카메라 ID, 시간, 크기를 묶어 다음 처리 단계의 입력 계약을 고정한다.
-    # frozen=True는 프레임 메타데이터가 처리 중 임의로 바뀌는 일을 막기 위한 선택이다.
-    # 단, numpy 배열 자체는 mutable이므로 화면 표시용 렌더링은 원본을 copy해서 처리한다.
+    # FramePacket: 프레임, 카메라 ID, 시간, 크기를 묶은 다음 처리 단계 입력 계약.
+    # frozen=True: 프레임 메타데이터 변경 방지.
+    # numpy 배열은 mutable이므로 화면 표시용 렌더링은 원본 copy 사용.
     camera_id: str
     frame: np.ndarray
     frame_index: int
@@ -67,7 +67,7 @@ class VideoSource:
 
         capture_source: str | int
         if isinstance(self.source, int):
-            # 정수 source는 OpenCV 카메라 인덱스다. 노트북 기본 카메라는 보통 0번이다.
+            # 정수 source: OpenCV 카메라 인덱스. 일반적인 내장 카메라 기본값은 0번.
             capture_source = self.source
         else:
             path = Path(self.source).expanduser()
@@ -82,7 +82,7 @@ class VideoSource:
 
         self._capture = capture
         self._frame_index = 0
-        # 일부 카메라나 코덱은 FPS/프레임 수를 0 또는 잘못된 값으로 줄 수 있으므로 음수는 막는다.
+        # FPS/프레임 수 메타데이터가 0 또는 잘못된 값으로 제공되는 입력이 있다.
         self._fps = max(0.0, float(capture.get(cv2.CAP_PROP_FPS)))
         self._total_frames = max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
 
@@ -94,7 +94,7 @@ class VideoSource:
         success, frame = capture.read()
 
         if not success and self.loop:
-            # 데모 영상 반복 재생용 경로다. 실시간 카메라는 rewind 개념이 없으므로 별도 RTSP 소스에서 다룬다.
+            # loop 재생은 파일 입력 전용 흐름이다. 실시간 카메라는 별도 RTSP 소스에서 처리한다.
             self.reset()
             success, frame = capture.read()
 
@@ -142,7 +142,7 @@ class VideoSource:
         if position_ms > 0.0:
             return position_ms / 1000.0
         if self._fps > 0.0:
-            # 일부 입력은 POS_MSEC를 제공하지 않는다. 이때 frame_index와 FPS로 재현 가능한 시간을 만든다.
+            # POS_MSEC가 없는 입력의 timestamp fallback: frame_index / FPS.
             return self._frame_index / self._fps
         return 0.0
 

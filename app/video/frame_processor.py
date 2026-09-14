@@ -12,8 +12,8 @@ from app.inference.detector import Detector, Detection
 
 @dataclass
 class ProcessedFrame:
-    # frame_packet.frame은 원본 프레임이다.
-    # rendered_frame은 bbox/metric을 그린 화면 표시용 프레임이며, 렌더링이 꺼져 있으면 None이다.
+    # frame_packet.frame: 원본 프레임.
+    # rendered_frame: bbox/metric을 그린 화면 표시용 프레임. 렌더링 비활성 시 None.
     frame_packet: FramePacket
     detections: list[Detection]
     inference_latency_ms: float
@@ -40,8 +40,8 @@ class FrameProcessor:
         if frame_packet is None:
             return None
 
-        # detector에는 원본 프레임을 그대로 넘긴다.
-        # bbox 좌표 계약은 원본 영상 기준이므로 렌더링용 copy와 섞이면 안 된다.
+        # detector 입력: 원본 프레임.
+        # bbox 좌표 계약: 원본 영상 기준. 렌더링용 copy와 분리.
         original_frame = frame_packet.frame
 
         inference_start = time.perf_counter()
@@ -63,7 +63,7 @@ class FrameProcessor:
 
         if self.draw_bbox or self.draw_metrics:
             # OpenCV drawing 함수는 입력 배열을 직접 수정한다.
-            # 원본 FramePacket을 보존하기 위해 화면 표시가 필요할 때만 복사본에 그린다.
+            # 화면 표시용 복사본은 원본 FramePacket 보존을 위한 별도 버퍼다.
             rendered_frame = original_frame.copy()
 
             if self.draw_bbox:
@@ -97,8 +97,8 @@ class FrameProcessor:
         for detection in detections:
             x1, y1, x2, y2 = detection.bbox
 
-            # detector 출력 bbox는 원본 좌표계 기준이지만, 모델 후처리나 float 반올림으로
-            # 프레임 경계를 조금 벗어날 수 있어 OpenCV drawing 전에 화면 안으로 제한한다.
+            # detector 출력 bbox는 원본 좌표계 기준이다.
+            # 모델 후처리나 float 반올림으로 생길 수 있는 경계 초과를 drawing 전에 제한한다.
             x1 = max(0, min(int(x1), frame_width - 1))
             y1 = max(0, min(int(y1), frame_height - 1))
             x2 = max(0, min(int(x2), frame_width - 1))
