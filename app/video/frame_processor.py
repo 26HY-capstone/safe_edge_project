@@ -73,11 +73,9 @@ class FrameProcessor:
                     inference_latency_ms=inference_latency_ms,
                     processing_fps=self.processing_fps,
                 )
-        
-        rendered_packet = replace(frame_packet, frame=frame)
 
         return ProcessedFrame(
-            frame_packet=rendered_packet,
+            frame_packet=frame_packet,
             detections=detections,
             inference_latency_ms=inference_latency_ms,
             rendered_frame=rendered_frame,
