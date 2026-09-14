@@ -1,0 +1,24 @@
+# 시스템 전체 실행 설정.
+
+system:
+  log_level: INFO
+
+storage:
+  database_path: data/events.db
+  snapshot_dir: data/snapshots
+  clip_dir: data/clips
+
+tracking:
+  history_seconds: 5
+  max_lost_frames: 30
+
+risk:
+  # 같은 위험 상황이 반복 저장되지 않도록 cooldown을 둔다.
+  event_cooldown_seconds: 5
+  warning_distance_px: 150
+  critical_distance_px: 80
+
+performance:
+  target_fps: 10
+  frame_skip: 1
+  report_p95_latency: true
