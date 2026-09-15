@@ -51,6 +51,14 @@ datasets/
 data/datasets/
 *.cache
 
+# Video data
+data/samples/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+
 # Downloaded archives
 *.zip
 *.tar

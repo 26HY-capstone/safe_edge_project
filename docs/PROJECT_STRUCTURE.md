@@ -192,7 +192,7 @@ config/
 - `config/cameras.yaml`: 카메라 ID, 영상 경로, 웹캠 번호, RTSP 주소, loop, 해상도, FPS 설정이다.
 - `config/model.yaml`: 모델 경로, backend, device, input size, confidence/IoU threshold, class mapping 설정이다.
 - `config/zones.yaml`: 카메라별 polygon, 로봇팔 margin, 지게차 buffer, 작업자 체류시간 설정이다.
-- `config/system.yaml`: 로그, DB 경로, snapshot 저장 위치, tracking 이력, risk cooldown, 목표 FPS 설정이다.
+- `config/system.yaml`: 로그, DB 경로, snapshot 저장 위치, ByteTrack threshold, tracking 이력, risk cooldown, 목표 FPS 설정이다.
 
 코드에는 로직을 두고, YAML에는 환경마다 바뀌는 값을 둔다.
 영상 경로, threshold, 실행 주기, 저장 경로처럼 바뀔 수 있는 값은 설정 파일에서 관리한다.
