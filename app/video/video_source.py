@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
+import yaml
 
 TEMP_DEFAULT_VIDEO_PATH = (
     Path(__file__).resolve().parents[2] / "data" / "samples" / "factory_floor_demo.mp4"
@@ -32,6 +35,18 @@ class FramePacket:
     fps: float
     width: int
     height: int
+
+
+@dataclass(frozen=True, slots=True)
+class CameraConfig:
+    camera_id: str
+    name: str
+    camera_type: str
+    source: VideoInput
+    loop: bool = False
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
 
 
 class VideoSource:
@@ -150,3 +165,135 @@ class VideoSource:
         if self._capture is None or not self._capture.isOpened():
             raise VideoSourceError("Video source is not open")
         return self._capture
+
+
+def load_camera_configs(
+    config_path: str | Path = "config/cameras.yaml",
+) -> list[CameraConfig]:
+    """cameras.yaml에서 카메라 입력 설정 목록을 읽는다."""
+    with Path(config_path).open("r", encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file) or {}
+
+    if not isinstance(config, Mapping):
+        raise ValueError("camera config must be a mapping")
+
+    cameras = config.get("cameras", [])
+    if not isinstance(cameras, list):
+        raise ValueError("cameras must be a list")
+
+    return [_camera_config_from_mapping(camera) for camera in cameras]
+
+
+def get_camera_config(
+    camera_id: str | None = None,
+    config_path: str | Path = "config/cameras.yaml",
+) -> CameraConfig:
+    """camera_id가 지정되면 해당 카메라를, 없으면 첫 번째 카메라를 반환한다."""
+    cameras = load_camera_configs(config_path)
+    if not cameras:
+        raise ValueError("cameras config must contain at least one camera")
+
+    if camera_id is None:
+        return cameras[0]
+
+    for camera in cameras:
+        if camera.camera_id == camera_id:
+            return camera
+    raise ValueError(f"Camera not found: {camera_id}")
+
+
+def create_video_source_from_config(camera_config: CameraConfig) -> VideoSource:
+    """CameraConfig를 OpenCV 기반 VideoSource로 변환한다."""
+    if camera_config.camera_type not in {"video", "webcam"}:
+        raise ValueError(
+            f"Unsupported VideoSource camera type: {camera_config.camera_type}"
+        )
+
+    return VideoSource(
+        source=camera_config.source,
+        camera_id=camera_config.camera_id,
+        loop=camera_config.loop,
+    )
+
+
+def create_video_source_from_cameras_config(
+    config_path: str | Path = "config/cameras.yaml",
+    camera_id: str | None = None,
+) -> VideoSource:
+    """cameras.yaml의 선택된 카메라 설정으로 VideoSource를 생성한다."""
+    camera_config = get_camera_config(camera_id=camera_id, config_path=config_path)
+    return create_video_source_from_config(camera_config)
+
+
+def _camera_config_from_mapping(camera: object) -> CameraConfig:
+    """YAML의 단일 camera 항목을 CameraConfig 데이터 계약으로 변환한다."""
+    if not isinstance(camera, Mapping):
+        raise ValueError("camera entry must be a mapping")
+
+    camera_id = _required_str(camera, "camera_id")
+    camera_type = _required_str(camera, "type")
+    source = _required_source(camera, camera_type)
+
+    return CameraConfig(
+        camera_id=camera_id,
+        name=str(camera.get("name", camera_id)),
+        camera_type=camera_type,
+        source=source,
+        loop=bool(camera.get("loop", False)),
+        width=_optional_int(camera.get("width")),
+        height=_optional_int(camera.get("height")),
+        fps=_optional_float(camera.get("fps")),
+    )
+
+
+def _required_str(values: Mapping[str, Any], key: str) -> str:
+    """필수 문자열 설정값을 공백 제거 후 반환한다."""
+    value = str(values.get(key, "")).strip()
+    if not value:
+        raise ValueError(f"{key} must not be empty")
+    return value
+
+
+def _required_source(values: Mapping[str, Any], camera_type: str) -> VideoInput:
+    """카메라 type에 맞는 OpenCV 입력값을 반환한다."""
+    if "source" not in values:
+        raise ValueError("source must be configured")
+
+    source = values["source"]
+    if camera_type == "webcam":
+        if isinstance(source, bool):
+            raise ValueError("webcam source must be an integer camera index")
+        if isinstance(source, int):
+            return source
+        if isinstance(source, str):
+            return int(source)
+        raise ValueError("webcam source must be an integer camera index")
+    if camera_type == "video":
+        return Path(str(source))
+    return str(source)
+
+
+def _optional_int(value: object) -> int | None:
+    """설정값이 있으면 int로 변환하고 없으면 None을 유지한다."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("integer config value must not be boolean")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float | str):
+        return int(value)
+    raise ValueError("integer config value must be int, float, or str")
+
+
+def _optional_float(value: object) -> float | None:
+    """설정값이 있으면 float로 변환하고 없으면 None을 유지한다."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("float config value must not be boolean")
+    if isinstance(value, float):
+            return value
+    if isinstance(value, int | float | str):
+        return float(value)
+    raise ValueError("float config value must be int, float, or str")
