@@ -9,6 +9,7 @@ import numpy as np
 from app.video.video_source import VideoSource, FramePacket
 from app.inference.detector import Detector, Detection
 from app.tracking.tracker import Tracker, TrackedObject
+from app.tracking.trajectory import MotionSummary, TrajectoryAnalyzer
 
 
 @dataclass
@@ -18,6 +19,7 @@ class ProcessedFrame:
     frame_packet: FramePacket
     detections: list[Detection]
     tracked_objects: list[TrackedObject]
+    motion_summaries: dict[int, MotionSummary]
     inference_latency_ms: float
     rendered_frame: np.ndarray | None
 
@@ -28,12 +30,14 @@ class FrameProcessor:
         video_source: VideoSource,
         detector: Detector,
         tracker: Tracker | None = None,
+        trajectory_analyzer: TrajectoryAnalyzer | None = None,
         draw_bbox: bool = True,
         draw_metrics: bool = True,
     ):
         self.video_source = video_source
         self.detector = detector
         self.tracker = tracker
+        self.trajectory_analyzer = trajectory_analyzer
         self.draw_bbox = draw_bbox
         self.draw_metrics = draw_metrics
         self.processing_fps = 0.0
@@ -56,6 +60,13 @@ class FrameProcessor:
         if self.tracker is not None:
             tracked_objects = self.tracker.update(
                 detections=detections,
+                frame_packet=frame_packet,
+            )
+
+        motion_summaries = {}
+        if self.trajectory_analyzer is not None:
+            motion_summaries = self.trajectory_analyzer.update(
+                tracked_objects=tracked_objects,
                 frame_packet=frame_packet,
             )
 
@@ -96,6 +107,7 @@ class FrameProcessor:
             frame_packet=frame_packet,
             detections=detections,
             tracked_objects=tracked_objects,
+            motion_summaries=motion_summaries,
             inference_latency_ms=inference_latency_ms,
             rendered_frame=rendered_frame,
         )
