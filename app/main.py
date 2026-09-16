@@ -5,8 +5,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app.video.sample_dataset import create_random_ceiling_eye_video_sources
 from app.video.video_source import (
     CameraConfig,
+    PROJECT_ROOT,
     VideoSource,
     VideoSourceError,
     create_video_source_from_config,
@@ -17,12 +19,13 @@ WINDOW_NAME = "Vision Guard"
 TILE_WIDTH = 640
 TILE_HEIGHT = 360
 MAX_VIEW_COUNT = 4
+DEFAULT_SAMPLE_DIR = PROJECT_ROOT / "data" / "samples" / "forklift_human_nearmiss"
 
 
 def main() -> None:
     """설정된 영상 입력을 최대 4개까지 한 창의 2x2 화면으로 표시한다."""
     camera_configs = load_camera_configs()
-    video_sources = _create_video_sources(camera_configs[:MAX_VIEW_COUNT])
+    video_sources = _create_display_video_sources(camera_configs)
 
     try:
         while True:
@@ -36,6 +39,30 @@ def main() -> None:
         for video_source in video_sources:
             video_source.close()
         cv2.destroyAllWindows()
+
+
+def _create_display_video_sources(
+    camera_configs: list[CameraConfig],
+) -> list[VideoSource]:
+    """샘플 ceiling/eye 영상과 설정 기반 입력을 4분할 화면 입력으로 구성한다."""
+    sample_sources = _create_sample_video_sources()
+    camera_source_count = MAX_VIEW_COUNT - len(sample_sources)
+    camera_sources = _create_video_sources(camera_configs[:camera_source_count])
+    return [*camera_sources, *sample_sources][:MAX_VIEW_COUNT]
+
+
+def _create_sample_video_sources() -> list[VideoSource]:
+    """샘플 metadata에서 ceiling/eye 영상 쌍을 생성한다."""
+    if not DEFAULT_SAMPLE_DIR.is_dir():
+        return []
+
+    try:
+        return create_random_ceiling_eye_video_sources(
+            sample_dir=DEFAULT_SAMPLE_DIR,
+            loop=True,
+        )
+    except (FileNotFoundError, ValueError):
+        return []
 
 
 def _create_video_sources(camera_configs: list[CameraConfig]) -> list[VideoSource]:
