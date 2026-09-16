@@ -55,6 +55,7 @@ data/datasets/
 
 # Video data
 data/samples/*
+!data/samples/.gitkeep
 *.mp4
 *.mov
 *.avi
