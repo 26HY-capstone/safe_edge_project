@@ -19,8 +19,7 @@ cameras:
     fps: 30
     loop: false
 
-# RTSP 카메라 설정 형식.
-# cameras:
+    # RTSP 카메라 설정 형식.
 #   - camera_id: factory-rtsp-01
 #     name: Factory RTSP Camera 01
 #     type: rtsp
