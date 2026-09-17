@@ -6,9 +6,11 @@ import numpy as np
 
 from app.inference.detector import Detection
 from app.inference.pytorch_backend import (
+    DEFAULT_FALLBACK_MODEL_NAME,
     PyTorchDetectorConfig,
     PyTorchYOLODetector,
     load_pytorch_detector_config,
+    _model_source_for_path,
 )
 
 
@@ -79,6 +81,7 @@ def test_load_pytorch_detector_config_reads_model_yaml(tmp_path) -> None:
 detector:
   backend: pytorch
   model_path: models/custom.pt
+  fallback_model_name: yolo26n.pt
   device: cpu
   input_size: 640
   confidence_threshold: 0.4
@@ -94,9 +97,19 @@ detector:
 
     assert config == PyTorchDetectorConfig(
         model_path=Path("models/custom.pt"),
+        fallback_model_name="yolo26n.pt",
         device="cpu",
         input_size=640,
         confidence_threshold=0.4,
         iou_threshold=0.5,
         classes={0: "person", 6: "forklift"},
     )
+
+
+def test_model_source_for_path_uses_fallback_model_when_file_is_missing() -> None:
+    model_source = _model_source_for_path(
+        model_path=Path("models/missing.pt"),
+        fallback_model_name=DEFAULT_FALLBACK_MODEL_NAME,
+    )
+
+    assert model_source == DEFAULT_FALLBACK_MODEL_NAME

@@ -13,10 +13,13 @@ import yaml
 from app.inference.detector import BBox, Detection, Detector
 from app.video.video_source import PROJECT_ROOT
 
+DEFAULT_FALLBACK_MODEL_NAME = "yolo26n.pt"
+
 
 @dataclass(frozen=True, slots=True)
 class PyTorchDetectorConfig:
     model_path: Path
+    fallback_model_name: str = DEFAULT_FALLBACK_MODEL_NAME
     device: str = "cpu"
     input_size: int = 640
     confidence_threshold: float = 0.35
@@ -25,6 +28,9 @@ class PyTorchDetectorConfig:
 
     def __post_init__(self) -> None:
         """모델 실행 설정의 유효 범위를 검증한다."""
+        fallback_model_name = self.fallback_model_name.strip()
+        if not fallback_model_name:
+            raise ValueError("fallback_model_name must not be empty")
         if self.input_size <= 0:
             raise ValueError("input_size must be positive")
         if not 0.0 <= self.confidence_threshold <= 1.0:
@@ -67,9 +73,10 @@ class PyTorchYOLODetector(Detector):
 
     def _load_model(self, model_path: Path) -> Any:
         """모델 파일을 확인한 뒤 Ultralytics YOLO 객체를 생성한다."""
-        resolved_model_path = _resolve_project_path(model_path)
-        if not resolved_model_path.is_file():
-            raise FileNotFoundError(f"Model file not found: {resolved_model_path}")
+        model_source = _model_source_for_path(
+            model_path=model_path,
+            fallback_model_name=self.config.fallback_model_name,
+        )
 
         try:
             from ultralytics import YOLO
@@ -79,7 +86,7 @@ class PyTorchYOLODetector(Detector):
                 "Install project dependencies from requirements.txt."
             ) from exc
 
-        return YOLO(str(resolved_model_path))
+        return YOLO(model_source)
 
     def _results_to_detections(
         self,
@@ -163,6 +170,12 @@ def load_pytorch_detector_config(
 
     return PyTorchDetectorConfig(
         model_path=Path(str(detector_config.get("model_path", "models/best.pt"))),
+        fallback_model_name=str(
+            detector_config.get(
+                "fallback_model_name",
+                DEFAULT_FALLBACK_MODEL_NAME,
+            )
+        ),
         device=str(detector_config.get("device", "cpu")),
         input_size=int(detector_config.get("input_size", 640)),
         confidence_threshold=float(
@@ -208,3 +221,14 @@ def _resolve_project_path(path: str | Path) -> Path:
     if resolved_path.exists():
         return resolved_path
     return PROJECT_ROOT / resolved_path
+
+
+def _model_source_for_path(
+    model_path: str | Path,
+    fallback_model_name: str,
+) -> str:
+    """로컬 모델 파일이 없으면 Ultralytics fallback 모델명을 반환한다."""
+    resolved_model_path = _resolve_project_path(model_path)
+    if resolved_model_path.is_file():
+        return str(resolved_model_path)
+    return fallback_model_name
