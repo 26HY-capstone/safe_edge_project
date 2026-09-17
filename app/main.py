@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import logging
+
 import cv2
 import numpy as np
 
+from app.inference.detector import Detector
+from app.inference.pytorch_backend import create_pytorch_detector_from_model_config
+from app.tracking.tracker import Tracker, create_tracker_from_system_config
+from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.sample_dataset import create_random_ceiling_eye_video_sources
 from app.video.video_source import (
     CameraConfig,
@@ -20,12 +27,24 @@ TILE_WIDTH = 640
 TILE_HEIGHT = 360
 MAX_VIEW_COUNT = 4
 DEFAULT_SAMPLE_DIR = PROJECT_ROOT / "data" / "samples" / "forklift_human_nearmiss"
+MODEL_CONFIG_PATH = PROJECT_ROOT / "config" / "model.yaml"
+SYSTEM_CONFIG_PATH = PROJECT_ROOT / "config" / "system.yaml"
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingComponents:
+    detector: Detector | None
+    trackers: dict[str, Tracker]
+    trajectory_analyzers: dict[str, TrajectoryAnalyzer]
 
 
 def main() -> None:
     """설정된 영상 입력을 최대 4개까지 한 창의 2x2 화면으로 표시한다."""
     camera_configs = load_camera_configs()
     video_sources = _create_display_video_sources(camera_configs)
+    _processing_components = _create_processing_components(video_sources)
 
     try:
         while True:
@@ -39,6 +58,40 @@ def main() -> None:
         for video_source in video_sources:
             video_source.close()
         cv2.destroyAllWindows()
+
+
+def _create_processing_components(
+    video_sources: list[VideoSource],
+) -> ProcessingComponents:
+    """입력별 tracking 상태와 trajectory analyzer를 생성한다."""
+    detector = _create_detector()
+    trackers = {
+        video_source.camera_id: _create_tracker()
+        for video_source in video_sources
+    }
+    trajectory_analyzers = {
+        video_source.camera_id: TrajectoryAnalyzer()
+        for video_source in video_sources
+    }
+    return ProcessingComponents(
+        detector=detector,
+        trackers=trackers,
+        trajectory_analyzers=trajectory_analyzers,
+    )
+
+
+def _create_detector() -> Detector | None:
+    """model.yaml 기반 detector를 생성하고 실패 시 화면 출력만 계속 가능하게 한다."""
+    try:
+        return create_pytorch_detector_from_model_config(MODEL_CONFIG_PATH)
+    except Exception as exc:
+        logger.warning("Detector is disabled: %s", exc)
+        return None
+
+
+def _create_tracker() -> Tracker:
+    """system.yaml 기반 tracker를 생성한다."""
+    return create_tracker_from_system_config(SYSTEM_CONFIG_PATH)
 
 
 def _create_display_video_sources(

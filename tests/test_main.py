@@ -57,3 +57,32 @@ def test_create_display_video_sources_limits_to_four(monkeypatch) -> None:
         "sample-ceiling",
         "sample-eye",
     ]
+
+
+def test_create_processing_components_uses_per_source_state(monkeypatch) -> None:
+    fake_detector = object()
+    created_trackers = []
+
+    def create_tracker() -> object:
+        tracker = object()
+        created_trackers.append(tracker)
+        return tracker
+
+    monkeypatch.setattr(main, "_create_detector", lambda: fake_detector)
+    monkeypatch.setattr(main, "_create_tracker", create_tracker)
+
+    components = main._create_processing_components(
+        [
+            VideoSource(source=0, camera_id="camera-0"),
+            VideoSource(source=1, camera_id="camera-1"),
+        ]
+    )
+
+    assert components.detector is fake_detector
+    assert set(components.trackers) == {"camera-0", "camera-1"}
+    assert list(components.trackers.values()) == created_trackers
+    assert set(components.trajectory_analyzers) == {"camera-0", "camera-1"}
+    assert (
+        components.trajectory_analyzers["camera-0"]
+        is not components.trajectory_analyzers["camera-1"]
+    )
