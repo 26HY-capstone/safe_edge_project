@@ -40,24 +40,99 @@ class ProcessingComponents:
     trajectory_analyzers: dict[str, TrajectoryAnalyzer]
 
 
+@dataclass(slots=True)
+class CameraViewState:
+    video_source: VideoSource
+    enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class ButtonBounds:
+    camera_id: str
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    def contains(self, x: int, y: int) -> bool:
+        """마우스 좌표가 버튼 영역 안에 있는지 확인한다."""
+        return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
+
+
+@dataclass(slots=True)
+class DisplayState:
+    camera_views: list[CameraViewState]
+    button_bounds: list[ButtonBounds]
+
+
 def main() -> None:
     """설정된 영상 입력을 최대 4개까지 한 창의 2x2 화면으로 표시한다."""
     camera_configs = load_camera_configs()
     video_sources = _create_display_video_sources(camera_configs)
     _processing_components = _create_processing_components(video_sources)
+    display_state = DisplayState(
+        camera_views=[
+            CameraViewState(video_source=video_source)
+            for video_source in video_sources
+        ],
+        button_bounds=[],
+    )
 
     try:
+        cv2.namedWindow(WINDOW_NAME)
+        cv2.setMouseCallback(WINDOW_NAME, _handle_mouse_event, display_state)
+
         while True:
-            frames = [_read_display_frame(video_source) for video_source in video_sources]
-            display_frame = _compose_2x2_grid(frames)
+            frames = [
+                _read_display_frame(camera_view)
+                for camera_view in display_state.camera_views
+            ]
+            display_frame, button_bounds = _compose_2x2_grid(
+                frames=frames,
+                camera_views=display_state.camera_views,
+            )
+            display_state.button_bounds = button_bounds
 
             cv2.imshow(WINDOW_NAME, display_frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
-        for video_source in video_sources:
-            video_source.close()
+        for camera_view in display_state.camera_views:
+            camera_view.video_source.close()
         cv2.destroyAllWindows()
+
+
+def _handle_mouse_event(
+    event: int,
+    x: int,
+    y: int,
+    flags: int,
+    display_state: DisplayState | None,
+) -> None:
+    """OpenCV 창의 버튼 클릭을 카메라 enable 상태로 반영한다."""
+    del flags
+    if event != cv2.EVENT_LBUTTONDOWN or display_state is None:
+        return
+
+    for button_bound in display_state.button_bounds:
+        if button_bound.contains(x, y):
+            _toggle_camera_view(display_state.camera_views, button_bound.camera_id)
+            return
+
+
+def _toggle_camera_view(
+    camera_views: list[CameraViewState],
+    camera_id: str,
+) -> None:
+    """camera_id에 해당하는 입력을 켜거나 끈다."""
+    for camera_view in camera_views:
+        if camera_view.video_source.camera_id != camera_id:
+            continue
+
+        camera_view.enabled = not camera_view.enabled
+        if not camera_view.enabled:
+            camera_view.video_source.close()
+        return
 
 
 def _create_processing_components(
@@ -132,8 +207,12 @@ def _create_video_sources(camera_configs: list[CameraConfig]) -> list[VideoSourc
     return video_sources
 
 
-def _read_display_frame(video_source: VideoSource) -> np.ndarray:
+def _read_display_frame(camera_view: CameraViewState) -> np.ndarray:
     """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다."""
+    video_source = camera_view.video_source
+    if not camera_view.enabled:
+        return _make_blank_tile(f"{video_source.camera_id}: off")
+
     try:
         frame_packet = video_source.read()
     except (FileNotFoundError, VideoSourceError):
@@ -146,16 +225,40 @@ def _read_display_frame(video_source: VideoSource) -> np.ndarray:
     return _draw_camera_label(frame=frame, label=video_source.camera_id)
 
 
-def _compose_2x2_grid(frames: list[np.ndarray]) -> np.ndarray:
+def _compose_2x2_grid(
+    frames: list[np.ndarray],
+    camera_views: list[CameraViewState] | None = None,
+) -> tuple[np.ndarray, list[ButtonBounds]]:
     """최대 4개의 프레임을 2x2 격자 이미지로 합친다."""
     tiles = [_resize_tile(frame) for frame in frames[:MAX_VIEW_COUNT]]
+    visible_camera_views = list((camera_views or [])[:MAX_VIEW_COUNT])
 
     while len(tiles) < MAX_VIEW_COUNT:
         tiles.append(_make_blank_tile("empty"))
+    while len(visible_camera_views) < MAX_VIEW_COUNT:
+        visible_camera_views.append(
+            CameraViewState(video_source=VideoSource(source=0, camera_id="empty"))
+        )
+
+    button_bounds: list[ButtonBounds] = []
+    for tile_index, camera_view in enumerate(visible_camera_views[:MAX_VIEW_COUNT]):
+        if camera_view.video_source.camera_id == "empty":
+            continue
+        offset_x = (tile_index % 2) * TILE_WIDTH
+        offset_y = (tile_index // 2) * TILE_HEIGHT
+        button_bounds.append(
+            _draw_power_button(
+                frame=tiles[tile_index],
+                camera_id=camera_view.video_source.camera_id,
+                enabled=camera_view.enabled,
+                offset_x=offset_x,
+                offset_y=offset_y,
+            )
+        )
 
     top_row = np.hstack([tiles[0], tiles[1]])
     bottom_row = np.hstack([tiles[2], tiles[3]])
-    return np.vstack([top_row, bottom_row])
+    return np.vstack([top_row, bottom_row]), button_bounds
 
 
 def _resize_tile(frame: np.ndarray) -> np.ndarray:
@@ -181,6 +284,41 @@ def _draw_camera_label(frame: np.ndarray, label: str) -> np.ndarray:
         2,
     )
     return frame
+
+
+def _draw_power_button(
+    frame: np.ndarray,
+    camera_id: str,
+    enabled: bool,
+    offset_x: int,
+    offset_y: int,
+) -> ButtonBounds:
+    """타일 오른쪽 위에 카메라 ON/OFF 버튼을 그린다."""
+    x1 = TILE_WIDTH - 104
+    y1 = 16
+    x2 = TILE_WIDTH - 18
+    y2 = 52
+    color = (40, 160, 40) if enabled else (70, 70, 70)
+    label = "ON" if enabled else "OFF"
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 1)
+    cv2.putText(
+        frame,
+        label,
+        (x1 + 18, y1 + 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
+    )
+    return ButtonBounds(
+        camera_id=camera_id,
+        x1=offset_x + x1,
+        y1=offset_y + y1,
+        x2=offset_x + x2,
+        y2=offset_y + y2,
+    )
 
 
 if __name__ == "__main__":

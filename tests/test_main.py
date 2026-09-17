@@ -86,3 +86,42 @@ def test_create_processing_components_uses_per_source_state(monkeypatch) -> None
         components.trajectory_analyzers["camera-0"]
         is not components.trajectory_analyzers["camera-1"]
     )
+
+
+def test_toggle_camera_view_closes_source_when_disabled(monkeypatch) -> None:
+    video_source = VideoSource(source=0, camera_id="camera-0")
+    camera_view = main.CameraViewState(video_source=video_source)
+    closed = []
+
+    monkeypatch.setattr(video_source, "close", lambda: closed.append(True))
+
+    main._toggle_camera_view([camera_view], "camera-0")
+
+    assert camera_view.enabled is False
+    assert closed == [True]
+
+    main._toggle_camera_view([camera_view], "camera-0")
+
+    assert camera_view.enabled is True
+    assert closed == [True]
+
+
+def test_compose_2x2_grid_returns_power_button_bounds() -> None:
+    frame = main._make_blank_tile("camera-0")
+    display_frame, button_bounds = main._compose_2x2_grid(
+        frames=[frame],
+        camera_views=[
+            main.CameraViewState(
+                video_source=VideoSource(source=0, camera_id="camera-0")
+            )
+        ],
+    )
+
+    assert display_frame.shape == (
+        main.TILE_HEIGHT * 2,
+        main.TILE_WIDTH * 2,
+        3,
+    )
+    assert len(button_bounds) == 1
+    assert button_bounds[0].camera_id == "camera-0"
+    assert button_bounds[0].contains(main.TILE_WIDTH - 60, 30)
