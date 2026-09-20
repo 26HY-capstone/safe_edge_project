@@ -360,6 +360,16 @@ THEN Risk = WARNING / CRITICAL
 - WARNING
 - CRITICAL
 
+### 14.1 현재 1차 통합 계약
+
+- `ZoneManager`는 프레임별 `ZoneFrameResult`를 반환한다.
+- 작업자 위치는 tracked person bbox의 bottom-center를 사용한다.
+- Static Zone은 `config/zones.yaml`의 원본 프레임 pixel Polygon을 사용한다.
+- 설비 Zone은 tracking bbox를 기준으로 Warning/Critical Polygon을 생성한다.
+- 설비 상태가 아직 주입되지 않으면 `UNKNOWN`으로 처리하고, Risk Rule이 이를 명시적으로 판단한다.
+- `EventManager`는 동일한 camera, worker, risk type, zone/equipment 조합의 반복 경고를 중복 생성하지 않는다.
+- 프레임 처리 순서는 Detection → Tracking → Trajectory → Zone → Risk → Event → Alert로 고정한다.
+
 ## 15. 실시간 경고
 
 Risk Event 발생 시 Alert Manager를 호출한다.

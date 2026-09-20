@@ -39,35 +39,56 @@ CCTV / RTSP / Video
   - bbox와 confidence 검증
   - center와 bottom-center 계산
 - `app/video/video_source.py`
-  - OpenCV 기반 로컬 영상 입력
+  - OpenCV 기반 로컬 영상 및 Webcam 입력
   - `FramePacket` 데이터 클래스
-  - open/read/reset/close 및 반복 재생
-  - 임시 기본 영상 경로 사용
+  - 설정 기반 경로 해석, open/read/reset/close 및 반복 재생
+  - 반복 재생 시 temporal state 초기화를 위한 `stream_epoch`
+- `app/tracking/tracker.py`, `app/tracking/trajectory.py`
+  - 공통 `Tracker` 계약, 단순 추적기와 ByteTrack adapter
+  - Track History 기반 이동거리, 방향 및 pixel 속도 계산
+- `app/zones/`
+  - 공통 `EquipmentState`, `Zone`, `ZoneFrameResult` 데이터 계약
+  - Polygon 포함 판정, bbox 확장·클리핑 및 bottom-center 계산
+  - `zones.yaml` Static Polygon 로드와 카메라별 필터링
+  - 지게차·컨베이어·로봇팔 bbox 기반 Zone 생성
+  - 로봇팔 bbox Temporal Smoothing
+- `app/risk/`
+  - `NORMAL/CAUTION/WARNING/CRITICAL` 위험등급
+  - 설비 상태와 Warning/Critical Polygon 기반 순수 위험 규칙
+  - Static Zone과 설비 Zone을 처리하는 `RiskEngine`
+- `app/alerts/event_manager.py`, `app/alerts/alert_manager.py`
+  - 이벤트 생성·중복 제거·등급 상승·해제
+  - 신규·상승 위험은 warning 로그, 해제는 info 로그로 출력
 - `app/video/frame_processor.py`
-  - VideoSource와 Detector 호출
-  - Detection bbox 및 성능 지표 렌더링
-  - `ProcessedFrame`과 inference latency 반환
-  - 기본 구현은 병합됐으나 아래 호환성 문제 수정과 통합 검증이 필요
+  - Detection → Tracking → Trajectory → Zone → Risk → Event → Alert 호출
+  - 원본 `FramePacket`을 보존한 별도 렌더링 프레임 반환
+  - stream 재시작 시 tracking, trajectory, zone, event state 초기화
+- `app/demo/multi_camera_viewer.py`, `app/video/sample_dataset.py`
+  - 최대 네 입력의 2x2 확인용 Viewer
+  - metadata JSON 기반 ceiling/eye 샘플 영상 선택
 
 ### 아직 구현되지 않음
 
-- 위 세 파일을 제외한 대부분의 Python, YAML, 테스트 파일은 현재 빈 파일이다.
-- `models/best.pt`, `models/best.onnx`, `models/best.engine`는 빈 placeholder다.
+- `app/inference/pytorch_backend.py`, `tensorrt_backend.py`, `model_manager.py`는 아직 빈 파일이다.
+- `app/equipment/` 상태 분석 모듈은 아직 생성되지 않아 `ZoneManager`는 상태가 주입되지 않으면 `UNKNOWN`을 사용한다.
+- `app/main.py`, RTSP, Storage, API, MQTT 및 Frontend는 아직 실행 가능한 구현이 아니다.
+- 모델 파일은 저장소에 포함하지 않는다. `models/.gitkeep`만 추적하며 실제 모델은 로컬 또는 배포 과정에서 제공한다.
 - `data/events.db`는 아직 초기화되지 않았다.
-- `frontend/package.json`과 `requirements.txt`는 아직 작성되지 않았다.
+- `frontend/package.json`은 아직 작성되지 않았다.
 - 빈 파일이나 placeholder가 존재한다는 이유만으로 기능이 구현됐다고 판단하지 않는다.
 
-### 확인된 호환성 문제
+### 현재 제한사항
 
-- `FramePacket`은 `frozen=True`인데 현재 `frame_processor.py`는 `frame_packet.frame = frame`으로 재할당한다.
-- 이 코드는 `FrozenInstanceError`를 발생시킬 수 있으므로 Detection 영상 통합 전에 수정한다.
-- 권장 방향은 원본 `FramePacket`을 변경하지 않고 렌더링된 frame을 새 `FramePacket` 또는 `ProcessedFrame` 필드로 반환하는 것이다.
-- 편의를 위해 `frozen=True`를 제거하려면 먼저 데이터 불변성 계약 변경을 팀과 합의하고 관련 테스트와 문서를 함께 수정한다.
+- 실제 YOLO 모델과 backend가 없으므로 실제 영상 End-to-End 추론은 아직 실행할 수 없다.
+- 설비 상태 분석이 연결되기 전에는 동적 설비 Zone의 상태가 `UNKNOWN`이고 위험 판단은 보수적으로 동작한다.
+- Event cooldown과 DB 저장, Snapshot 및 Clip은 다음 구현 단계다.
+- `FramePacket` 불변성 문제는 원본과 렌더링 프레임을 분리하여 해결했다.
 
 ### 현재 테스트 영상
 
-- 저장소에 포함된 테스트 영상은 `data/samples/factory_floor_demo.mp4`다.
-- `app/video/video_source.py`의 절대 경로는 임시방편이다. `config/cameras.yaml` 구현 후 설정 기반 경로로 교체한다.
+- 대용량 테스트 영상은 Git에서 제외하고 `data/samples/.gitkeep`만 추적한다.
+- 로컬 테스트 영상은 `config/cameras.yaml`의 `source` 경로에 배치하거나 별도 설정 파일로 지정한다.
+- 샘플 데이터셋의 2x2 확인은 `python -m app.demo.multi_camera_viewer`를 사용한다.
 
 ## 4. 반드시 지켜야 하는 아키텍처 규칙
 

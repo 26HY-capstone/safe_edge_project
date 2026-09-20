@@ -43,6 +43,7 @@ docs/
 app/
 ├── alerts/
 ├── api/
+├── demo/
 ├── inference/
 ├── main.py
 ├── risk/
@@ -68,12 +69,18 @@ app/
 app/video/
 ├── frame_processor.py
 ├── rtsp_source.py
+├── sample_dataset.py
 └── video_source.py
 ```
 
 - `app/video/video_source.py`: 로컬 영상이나 웹캠에서 프레임을 읽어 `FramePacket`으로 만든다.
-- `app/video/frame_processor.py`: 프레임을 읽고 detector를 호출한 뒤, bbox와 FPS/지연시간 표시를 그린다.
+- `app/video/frame_processor.py`: Detection, Tracking, Trajectory, Zone, Risk, Event, Alert를 순서대로 호출하고 표시용 프레임을 만든다.
 - `app/video/rtsp_source.py`: RTSP 카메라 입력을 다룬다. 연결, timeout, buffering, 재접속 같은 처리가 여기에 들어간다.
+- `app/video/sample_dataset.py`: 샘플 metadata JSON에서 ceiling/eye 영상 쌍을 선택한다.
+
+## 데모
+
+- `app/demo/multi_camera_viewer.py`: 운영 진입점과 분리된 최대 4개 입력의 2x2 확인용 Viewer다.
 
 ## 객체 탐지
 
@@ -109,12 +116,14 @@ app/zones/
 ├── conveyor.py
 ├── forklift.py
 ├── geometry.py
+├── models.py
 ├── robot_arm.py
 ├── worker_zone.py
 └── zone_manager.py
 ```
 
 - `app/zones/geometry.py`: 좌표, polygon 포함 여부, 거리, 교차 같은 기본 계산을 모아둔다.
+- `app/zones/models.py`: `EquipmentState`, `Zone`, `ZoneFrameResult` 등 Zone 계층의 공통 계약을 정의한다.
 - `app/zones/zone_manager.py`: 카메라별 Zone을 만들고 읽고 저장하는 관리 코드다.
 - `app/zones/worker_zone.py`: 작업자의 bottom-center 위치로 Zone 진입, 이탈, 체류시간을 계산한다.
 - `app/zones/forklift.py`: 지게차 주변 안전 buffer와 이동방향 기반 danger zone을 만든다.
@@ -126,10 +135,12 @@ app/zones/
 
 ```text
 app/risk/
+├── models.py
 ├── risk_engine.py
 └── risk_rules.py
 ```
 
+- `app/risk/models.py`: 위험등급과 `RiskAssessment` 계약을 정의한다.
 - `app/risk/risk_rules.py`: 설비별 위험 조건, 거리 기준, 시간 기준, 위험등급 규칙이 들어간다.
 - `app/risk/risk_engine.py`: 작업자, 설비 상태, Zone, 거리, 이동 경로, PPE 결과를 모아 최종 위험도를 계산한다.
 
@@ -204,11 +215,11 @@ data/
 ├── events.db
 ├── logs/
 ├── samples/
-│   └── factory_floor_demo.mp4
+│   └── .gitkeep
 └── snapshots/
 ```
 
-- `data/samples/factory_floor_demo.mp4`: 샘플 공장 CCTV 영상이다. 초기 파이프라인 확인에 쓴다.
+- `data/samples/`: 로컬 테스트 영상을 두는 위치다. 대용량 영상은 Git에서 제외한다.
 - `data/events.db`: SQLite 이벤트 DB 파일이다.
 - `data/logs/`: 실행 로그가 쌓이는 위치다.
 - `data/snapshots/`: 위험 이벤트 snapshot이 저장되는 위치다.
@@ -217,14 +228,11 @@ data/
 
 ```text
 models/
-├── best.engine
-├── best.onnx
-└── best.pt
+└── .gitkeep
 ```
 
-- `models/best.pt`: 로컬 개발과 기본 검증에 쓰는 PyTorch YOLO 모델이다.
-- `models/best.onnx`: ONNX로 변환한 모델이다.
-- `models/best.engine`: Jetson TensorRT 실행에 쓰는 engine 모델이다.
+- 실제 `.pt`, `.onnx`, `.engine` 모델은 Git에 넣지 않고 로컬 또는 배포 과정에서 제공한다.
+- `config/model.yaml`의 경로는 실제 제공된 모델과 일치해야 한다.
 
 ## 프론트엔드
 
@@ -242,8 +250,14 @@ frontend/
 
 ```text
 tests/
+├── test_event_manager.py
+├── test_frame_processor.py
+├── test_multi_camera_viewer.py
 ├── test_risk.py
+├── test_sample_dataset.py
 ├── test_tracking.py
+├── test_trajectory.py
+├── test_video_source.py
 └── test_zones.py
 ```
 
