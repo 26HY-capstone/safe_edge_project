@@ -6,6 +6,7 @@ zones:
   - zone_id: sample-conveyor-danger
     camera_id: factory-floor-demo
     zone_type: conveyor_danger
+    risk_level: warning
     polygon:
       - [120, 400]
       - [720, 400]
