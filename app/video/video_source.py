@@ -12,9 +12,9 @@ import cv2
 import numpy as np
 import yaml
 
-TEMP_DEFAULT_VIDEO_PATH = (
-    Path(__file__).resolve().parents[2] / "data" / "samples" / "factory_floor_demo.mp4"
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "config" / "cameras.yaml"
+TEMP_DEFAULT_VIDEO_PATH = PROJECT_ROOT / "data" / "samples" / "factory_floor_demo.mp4"
 # OpenCV VideoCapture 입력: 파일 경로 또는 카메라 번호.
 VideoInput = str | Path | int
 
@@ -35,6 +35,7 @@ class FramePacket:
     fps: float
     width: int
     height: int
+    stream_epoch: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,14 @@ class CameraConfig:
     height: int | None = None
     fps: float | None = None
 
+    def __post_init__(self) -> None:
+        if self.width is not None and self.width <= 0:
+            raise ValueError("camera width must be positive")
+        if self.height is not None and self.height <= 0:
+            raise ValueError("camera height must be positive")
+        if self.fps is not None and self.fps <= 0.0:
+            raise ValueError("camera fps must be positive")
+
 
 class VideoSource:
     def __init__(
@@ -55,12 +64,19 @@ class VideoSource:
         source: VideoInput = TEMP_DEFAULT_VIDEO_PATH,
         camera_id: str = "factory-floor-demo",
         loop: bool = False,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
     ) -> None:
         self.source = source
         self.camera_id = camera_id
         self.loop = loop
+        self.requested_width = width
+        self.requested_height = height
+        self.requested_fps = fps
         self._capture: cv2.VideoCapture | None = None
         self._frame_index = 0
+        self._stream_epoch = 0
         self._fps = 0.0
         self._total_frames = 0
 
@@ -95,8 +111,17 @@ class VideoSource:
             capture.release()
             raise VideoSourceError(f"Unable to open video source: {self.source}")
 
+        if isinstance(self.source, int):
+            if self.requested_width is not None:
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.requested_width)
+            if self.requested_height is not None:
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.requested_height)
+            if self.requested_fps is not None:
+                capture.set(cv2.CAP_PROP_FPS, self.requested_fps)
+
         self._capture = capture
         self._frame_index = 0
+        self._stream_epoch = 0
         # FPS/프레임 수 메타데이터가 0 또는 잘못된 값으로 제공되는 입력이 있다.
         self._fps = max(0.0, float(capture.get(cv2.CAP_PROP_FPS)))
         self._total_frames = max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
@@ -126,6 +151,7 @@ class VideoSource:
             fps=self._fps,
             width=width,
             height=height,
+            stream_epoch=self._stream_epoch,
         )
         self._frame_index += 1
         return packet
@@ -135,6 +161,7 @@ class VideoSource:
         if not capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
             raise VideoSourceError(f"Unable to reset video source: {self.source}")
         self._frame_index = 0
+        self._stream_epoch += 1
 
     def close(self) -> None:
         if self._capture is not None:
@@ -168,10 +195,11 @@ class VideoSource:
 
 
 def load_camera_configs(
-    config_path: str | Path = "config/cameras.yaml",
+    config_path: str | Path = DEFAULT_CAMERA_CONFIG_PATH,
 ) -> list[CameraConfig]:
     """cameras.yaml에서 카메라 입력 설정 목록을 읽는다."""
-    with Path(config_path).open("r", encoding="utf-8") as config_file:
+    resolved_config_path = _resolve_project_path(config_path)
+    with resolved_config_path.open("r", encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file) or {}
 
     if not isinstance(config, Mapping):
@@ -186,7 +214,7 @@ def load_camera_configs(
 
 def get_camera_config(
     camera_id: str | None = None,
-    config_path: str | Path = "config/cameras.yaml",
+    config_path: str | Path = DEFAULT_CAMERA_CONFIG_PATH,
 ) -> CameraConfig:
     """camera_id가 지정되면 해당 카메라를, 없으면 첫 번째 카메라를 반환한다."""
     cameras = load_camera_configs(config_path)
@@ -209,15 +237,22 @@ def create_video_source_from_config(camera_config: CameraConfig) -> VideoSource:
             f"Unsupported VideoSource camera type: {camera_config.camera_type}"
         )
 
+    source = camera_config.source
+    if isinstance(source, Path):
+        source = _resolve_project_path(source)
+
     return VideoSource(
-        source=camera_config.source,
+        source=source,
         camera_id=camera_config.camera_id,
         loop=camera_config.loop,
+        width=camera_config.width,
+        height=camera_config.height,
+        fps=camera_config.fps,
     )
 
 
 def create_video_source_from_cameras_config(
-    config_path: str | Path = "config/cameras.yaml",
+    config_path: str | Path = DEFAULT_CAMERA_CONFIG_PATH,
     camera_id: str | None = None,
 ) -> VideoSource:
     """cameras.yaml의 선택된 카메라 설정으로 VideoSource를 생성한다."""
@@ -293,7 +328,15 @@ def _optional_float(value: object) -> float | None:
     if isinstance(value, bool):
         raise ValueError("float config value must not be boolean")
     if isinstance(value, float):
-            return value
+        return value
     if isinstance(value, int | float | str):
         return float(value)
     raise ValueError("float config value must be int, float, or str")
+
+
+def _resolve_project_path(path: str | Path) -> Path:
+    """절대경로는 유지하고 상대경로는 프로젝트 루트 기준으로 해석한다."""
+    resolved_path = Path(path).expanduser()
+    if resolved_path.is_absolute():
+        return resolved_path
+    return PROJECT_ROOT / resolved_path

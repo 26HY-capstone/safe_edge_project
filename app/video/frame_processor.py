@@ -6,10 +6,16 @@ import time
 import cv2
 import numpy as np
 
-from app.video.video_source import VideoSource, FramePacket
+from app.alerts.alert_manager import AlertManager
+from app.alerts.event_manager import EventManager, RiskEvent
 from app.inference.detector import Detector, Detection
+from app.risk.models import RiskAssessment, RiskLevel
+from app.risk.risk_engine import RiskEngine
 from app.tracking.tracker import Tracker, TrackedObject
 from app.tracking.trajectory import MotionSummary, TrajectoryAnalyzer
+from app.video.video_source import VideoSource, FramePacket
+from app.zones.models import ZoneFrameResult
+from app.zones.zone_manager import ZoneManager
 
 
 @dataclass
@@ -22,6 +28,9 @@ class ProcessedFrame:
     motion_summaries: dict[int, MotionSummary]
     inference_latency_ms: float
     rendered_frame: np.ndarray | None
+    zone_result: ZoneFrameResult | None
+    risk_assessments: list[RiskAssessment]
+    risk_events: list[RiskEvent]
 
 
 class FrameProcessor:
@@ -31,22 +40,38 @@ class FrameProcessor:
         detector: Detector,
         tracker: Tracker | None = None,
         trajectory_analyzer: TrajectoryAnalyzer | None = None,
+        zone_manager: ZoneManager | None = None,
+        risk_engine: RiskEngine | None = None,
+        event_manager: EventManager | None = None,
+        alert_manager: AlertManager | None = None,
         draw_bbox: bool = True,
         draw_metrics: bool = True,
+        draw_zones: bool = True,
+        draw_risks: bool = True,
     ):
         self.video_source = video_source
         self.detector = detector
         self.tracker = tracker
         self.trajectory_analyzer = trajectory_analyzer
+        self.zone_manager = zone_manager
+        self.risk_engine = risk_engine
+        self.event_manager = event_manager
+        self.alert_manager = alert_manager
         self.draw_bbox = draw_bbox
         self.draw_metrics = draw_metrics
+        self.draw_zones = draw_zones
+        self.draw_risks = draw_risks
         self.processing_fps = 0.0
+        self._last_stream_epoch: int | None = None
+        self._last_frame_index: int | None = None
 
     def process_next(self) -> ProcessedFrame | None:
         frame_packet = self.video_source.read()
 
         if frame_packet is None:
             return None
+
+        self._reset_if_stream_restarted(frame_packet)
 
         # detector 입력: 원본 프레임.
         # bbox 좌표 계약: 원본 영상 기준. 렌더링용 copy와 분리.
@@ -70,6 +95,27 @@ class FrameProcessor:
                 frame_packet=frame_packet,
             )
 
+        zone_result = None
+        if self.zone_manager is not None:
+            zone_result = self.zone_manager.process(
+                frame_packet=frame_packet,
+                tracked_objects=tracked_objects,
+            )
+
+        risk_assessments: list[RiskAssessment] = []
+        if self.risk_engine is not None and zone_result is not None:
+            risk_assessments = self.risk_engine.evaluate(zone_result)
+
+        risk_events: list[RiskEvent] = []
+        if self.event_manager is not None:
+            risk_events = self.event_manager.update(
+                risk_assessments,
+                timestamp=frame_packet.timestamp,
+                frame_index=frame_packet.frame_index,
+            )
+        if self.alert_manager is not None and risk_events:
+            self.alert_manager.handle(risk_events)
+
         inference_latency_ms = (
             inference_end - inference_start
         ) * 1000.0
@@ -83,7 +129,13 @@ class FrameProcessor:
 
         rendered_frame = None
 
-        if self.draw_bbox or self.draw_metrics:
+        should_render = (
+            self.draw_bbox
+            or self.draw_metrics
+            or (self.draw_zones and zone_result is not None)
+            or (self.draw_risks and bool(risk_assessments))
+        )
+        if should_render:
             # OpenCV drawing 함수는 입력 배열을 직접 수정한다.
             # 화면 표시용 복사본은 원본 FramePacket 보존을 위한 별도 버퍼다.
             rendered_frame = original_frame.copy()
@@ -103,6 +155,12 @@ class FrameProcessor:
                     processing_fps=self.processing_fps,
                 )
 
+            if self.draw_zones and zone_result is not None:
+                self._draw_zones(rendered_frame, zone_result)
+
+            if self.draw_risks and risk_assessments:
+                self._draw_risks(rendered_frame, risk_assessments)
+
         return ProcessedFrame(
             frame_packet=frame_packet,
             detections=detections,
@@ -110,7 +168,32 @@ class FrameProcessor:
             motion_summaries=motion_summaries,
             inference_latency_ms=inference_latency_ms,
             rendered_frame=rendered_frame,
+            zone_result=zone_result,
+            risk_assessments=risk_assessments,
+            risk_events=risk_events,
         )
+
+    def _reset_if_stream_restarted(self, frame_packet: FramePacket) -> None:
+        restarted = (
+            self._last_stream_epoch is not None
+            and frame_packet.stream_epoch != self._last_stream_epoch
+        )
+        frame_index_reversed = (
+            self._last_frame_index is not None
+            and frame_packet.frame_index < self._last_frame_index
+        )
+        if restarted or frame_index_reversed:
+            if self.tracker is not None:
+                self.tracker.reset()
+            if self.trajectory_analyzer is not None:
+                self.trajectory_analyzer.reset()
+            if self.zone_manager is not None:
+                self.zone_manager.reset()
+            if self.event_manager is not None:
+                self.event_manager.reset()
+
+        self._last_stream_epoch = frame_packet.stream_epoch
+        self._last_frame_index = frame_packet.frame_index
 
     def _draw_detection_results(
         self,
@@ -241,3 +324,53 @@ class FrameProcessor:
             (255, 255, 255),
             2,
         )
+
+    @staticmethod
+    def _draw_zones(frame: np.ndarray, zone_result: ZoneFrameResult) -> None:
+        for zone in zone_result.zones:
+            FrameProcessor._draw_polygon(frame, zone.polygon, (0, 215, 255))
+        for equipment in zone_result.equipments:
+            FrameProcessor._draw_polygon(
+                frame,
+                equipment.warning_zone,
+                (0, 215, 255),
+            )
+            FrameProcessor._draw_polygon(
+                frame,
+                equipment.critical_zone,
+                (0, 0, 255),
+            )
+
+    @staticmethod
+    def _draw_risks(
+        frame: np.ndarray,
+        assessments: list[RiskAssessment],
+    ) -> None:
+        visible = [
+            assessment
+            for assessment in assessments
+            if assessment.risk_level != RiskLevel.NORMAL
+        ]
+        for index, assessment in enumerate(visible[:5]):
+            cv2.putText(
+                frame,
+                (
+                    f"{assessment.risk_level.name} "
+                    f"worker={assessment.worker_track_id} "
+                    f"zone={assessment.zone_id or '-'}"
+                ),
+                (20, 125 + index * 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (0, 0, 255),
+                2,
+            )
+
+    @staticmethod
+    def _draw_polygon(
+        frame: np.ndarray,
+        polygon: tuple[tuple[float, float], ...],
+        color: tuple[int, int, int],
+    ) -> None:
+        points = np.asarray(polygon, dtype=np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame, [points], isClosed=True, color=color, thickness=2)

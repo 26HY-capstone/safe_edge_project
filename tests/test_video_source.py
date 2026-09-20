@@ -6,6 +6,7 @@ import pytest
 
 from app.video.video_source import (
     CameraConfig,
+    PROJECT_ROOT,
     VideoSource,
     create_video_source_from_cameras_config,
     create_video_source_from_config,
@@ -77,7 +78,7 @@ def test_create_video_source_from_cameras_config_uses_first_camera(tmp_path) -> 
 
     assert isinstance(video_source, VideoSource)
     assert video_source.camera_id == "demo-video"
-    assert video_source.source == Path("data/samples/demo.mp4")
+    assert video_source.source == PROJECT_ROOT / "data/samples/demo.mp4"
     assert video_source.loop is True
 
 
@@ -91,3 +92,20 @@ def test_create_video_source_rejects_rtsp_until_rtsp_source_is_implemented() -> 
 
     with pytest.raises(ValueError, match="Unsupported VideoSource camera type"):
         create_video_source_from_config(camera_config)
+
+
+def test_create_video_source_preserves_webcam_capture_preferences() -> None:
+    source = create_video_source_from_config(
+        CameraConfig(
+            camera_id="webcam",
+            name="Webcam",
+            camera_type="webcam",
+            source=0,
+            width=1280,
+            height=720,
+            fps=30.0,
+        )
+    )
+    assert source.requested_width == 1280
+    assert source.requested_height == 720
+    assert source.requested_fps == 30.0
