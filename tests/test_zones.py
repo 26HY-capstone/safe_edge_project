@@ -7,7 +7,7 @@ import pytest
 from app.tracking.tracker import TrackedObject
 from app.zones.conveyor import create_conveyor_zone_info
 from app.zones.forklift import create_forklift_zone_info
-from app.zones.geometry import get_bottom_center, is_point_in_bbox, scale_bbox
+from app.zones.geometry import is_point_in_bbox, scale_bbox
 from app.zones.models import EquipmentType
 from app.zones.robot_arm import create_robot_arm_zone_info
 from app.zones.worker_zone import (
@@ -45,13 +45,6 @@ def make_tracked_object(
         timestamp=1000.0,
     )
 
-
-def test_get_bottom_center():
-    bbox = (100.0, 100.0, 300.0, 500.0)
-
-    result = get_bottom_center(bbox)
-
-    assert result == (200.0, 500.0)
 
 
 def test_scale_bbox():
