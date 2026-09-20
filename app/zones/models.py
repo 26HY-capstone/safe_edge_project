@@ -61,6 +61,10 @@ class EquipmentZoneInfo:
     # 초기 프로토타입에서는 equipment_bbox와 동일한 영역을 사용할 수 있다.
     critical_zone: BBox
 
+    # 설비의 작동 여부 판별
+    # 초기 프로토타입에서는 직접 작동 상태를 입력한다.
+    is_active: bool
+
 
 @dataclass(frozen=True, slots=True)
 class ZoneFrameResult:

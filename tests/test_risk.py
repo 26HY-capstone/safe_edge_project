@@ -20,6 +20,7 @@ def _equipment(
     equipment_id: int,
     warning_zone: tuple[float, float, float, float],
     critical_zone: tuple[float, float, float, float],
+    is_active: bool,
     equipment_type: EquipmentType = EquipmentType.FORKLIFT,
 ) -> EquipmentZoneInfo:
     return EquipmentZoneInfo(
@@ -28,6 +29,7 @@ def _equipment(
         equipment_bbox=critical_zone,
         warning_zone=warning_zone,
         critical_zone=critical_zone,
+        is_active=is_active,
     )
 
 
@@ -42,30 +44,81 @@ _CRITICAL_ZONE = (40.0, 40.0, 60.0, 60.0)
 
 
 def test_determine_risk_level_returns_normal_when_outside_both_zones() -> None:
-    """warning_zone과 critical_zone 밖에 있으면 NORMAL을 반환해야 한다."""
+    """설비가 작동 중이어도 두 Zone 밖에 있으면 NORMAL을 반환해야 한다."""
 
     worker = _worker(person_id=1, bottom_center=(200.0, 200.0))
-    equipment = _equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE)
+    equipment = _equipment(
+        equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+    )
 
     assert determine_risk_level(worker, equipment) == RiskLevel.NORMAL
 
 
 def test_determine_risk_level_returns_warning_when_inside_warning_zone_only() -> None:
-    """warning_zone 내부이지만 critical_zone 밖이면 WARNING을 반환해야 한다."""
+    """설비 작동 중 + warning_zone 내부(critical_zone 밖)면 WARNING을 반환해야 한다."""
 
     worker = _worker(person_id=1, bottom_center=(10.0, 10.0))
-    equipment = _equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE)
+    equipment = _equipment(
+        equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+    )
 
     assert determine_risk_level(worker, equipment) == RiskLevel.WARNING
 
 
 def test_determine_risk_level_returns_critical_when_inside_critical_zone() -> None:
-    """critical_zone 내부에 있으면 CRITICAL을 반환해야 한다."""
+    """설비 작동 중 + critical_zone 내부면 CRITICAL을 반환해야 한다."""
 
     worker = _worker(person_id=1, bottom_center=(50.0, 50.0))
-    equipment = _equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE)
+    equipment = _equipment(
+        equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+    )
 
     assert determine_risk_level(worker, equipment) == RiskLevel.CRITICAL
+
+
+def test_determine_risk_level_downgrades_one_level_when_equipment_is_stopped() -> None:
+    """
+    설비 작동 여부에 따라 위험등급 매트릭스 전체를 검증한다.
+
+                    Zone 외부   Warning Zone   Critical Zone
+    설비 정지         NORMAL      NORMAL         WARNING
+    설비 작동         NORMAL      WARNING        CRITICAL
+    """
+
+    outside_point = (200.0, 200.0)
+    warning_point = (10.0, 10.0)
+    critical_point = (50.0, 50.0)
+
+    stopped_equipment = _equipment(
+        equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=False
+    )
+    active_equipment = _equipment(
+        equipment_id=2, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+    )
+
+    # 1) 설비 정지 + Zone 외부 → NORMAL
+    worker = _worker(person_id=1, bottom_center=outside_point)
+    assert determine_risk_level(worker, stopped_equipment) == RiskLevel.NORMAL
+
+    # 2) 설비 정지 + Warning Zone → NORMAL (한 단계 낮아짐)
+    worker = _worker(person_id=2, bottom_center=warning_point)
+    assert determine_risk_level(worker, stopped_equipment) == RiskLevel.NORMAL
+
+    # 3) 설비 정지 + Critical Zone → WARNING (한 단계 낮아짐)
+    worker = _worker(person_id=3, bottom_center=critical_point)
+    assert determine_risk_level(worker, stopped_equipment) == RiskLevel.WARNING
+
+    # 4) 설비 작동 + Zone 외부 → NORMAL
+    worker = _worker(person_id=4, bottom_center=outside_point)
+    assert determine_risk_level(worker, active_equipment) == RiskLevel.NORMAL
+
+    # 5) 설비 작동 + Warning Zone → WARNING
+    worker = _worker(person_id=5, bottom_center=warning_point)
+    assert determine_risk_level(worker, active_equipment) == RiskLevel.WARNING
+
+    # 6) 설비 작동 + Critical Zone → CRITICAL
+    worker = _worker(person_id=6, bottom_center=critical_point)
+    assert determine_risk_level(worker, active_equipment) == RiskLevel.CRITICAL
 
 
 def test_is_point_in_bbox_treats_boundary_as_inside() -> None:
@@ -115,7 +168,11 @@ def test_risk_engine_returns_empty_list_when_only_equipments_exist() -> None:
         frame_index=0,
         camera_id="cam_01",
         workers=[],
-        equipments=[_equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE)],
+        equipments=[
+            _equipment(
+                equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+            )
+        ],
     )
 
     assert RiskEngine().evaluate(zone_result) == []
@@ -129,7 +186,11 @@ def test_risk_engine_returns_one_assessment_for_one_worker_and_one_equipment() -
         frame_index=0,
         camera_id="cam_01",
         workers=[_worker(person_id=1, bottom_center=(50.0, 50.0))],
-        equipments=[_equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE)],
+        equipments=[
+            _equipment(
+                equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+            )
+        ],
     )
 
     assessments = RiskEngine().evaluate(zone_result)
@@ -150,8 +211,12 @@ def test_risk_engine_returns_all_combinations_for_multiple_workers_and_equipment
             _worker(person_id=2, bottom_center=(200.0, 200.0)),
         ],
         equipments=[
-            _equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE),
-            _equipment(equipment_id=2, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE),
+            _equipment(
+                equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+            ),
+            _equipment(
+                equipment_id=2, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+            ),
         ],
     )
 
@@ -163,7 +228,9 @@ def test_risk_engine_returns_all_combinations_for_multiple_workers_and_equipment
 def test_risk_engine_does_not_filter_by_risk_level() -> None:
     """같은 프레임에서 NORMAL, WARNING, CRITICAL이 함께 발생해도 모두 반환돼야 한다."""
 
-    equipment = _equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE)
+    equipment = _equipment(
+        equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+    )
     zone_result = ZoneFrameResult(
         timestamp=0.0,
         frame_index=0,
@@ -191,7 +258,11 @@ def test_risk_engine_copies_frame_context_from_zone_result() -> None:
         frame_index=7,
         camera_id="cam_02",
         workers=[_worker(person_id=1, bottom_center=(50.0, 50.0))],
-        equipments=[_equipment(equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE)],
+        equipments=[
+            _equipment(
+                equipment_id=1, warning_zone=_WARNING_ZONE, critical_zone=_CRITICAL_ZONE, is_active=True
+            )
+        ],
     )
 
     assessment = RiskEngine().evaluate(zone_result)[0]
@@ -210,12 +281,14 @@ def test_risk_engine_maps_person_and_equipment_identity_per_combination() -> Non
         equipment_id=10,
         warning_zone=_WARNING_ZONE,
         critical_zone=_CRITICAL_ZONE,
+        is_active=True,
         equipment_type=EquipmentType.FORKLIFT,
     )
     equipment_2 = _equipment(
         equipment_id=20,
         warning_zone=_WARNING_ZONE,
         critical_zone=_CRITICAL_ZONE,
+        is_active=True,
         equipment_type=EquipmentType.ROBOT_ARM,
     )
 
