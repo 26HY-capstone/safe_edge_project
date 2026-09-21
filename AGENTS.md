@@ -31,43 +31,71 @@ CCTV / RTSP / Video
 
 ## 3. 현재 구현 상태
 
-### 구현됨
+이 절의 상태는 `main` 브랜치를 기준으로 한다. 다른 기능 브랜치에만 존재하는 코드는 병합 전까지 구현 완료로 간주하지 않는다.
+
+### `main`에 구현 및 병합됨
 
 - `app/inference/detector.py`
-  - `Detection` 데이터 클래스
-  - `Detector` 추상 인터페이스
-  - bbox와 confidence 검증
+  - `Detection` 데이터 클래스와 `Detector` 추상 인터페이스
+  - 원본 프레임 기준 `xyxy` bbox, confidence 및 프레임 검증
   - center와 bottom-center 계산
 - `app/video/video_source.py`
-  - OpenCV 기반 로컬 영상 입력
-  - `FramePacket` 데이터 클래스
-  - open/read/reset/close 및 반복 재생
-  - 임시 기본 영상 경로 사용
+  - OpenCV 기반 로컬 영상과 Webcam 입력
+  - 불변 `FramePacket`, `CameraConfig`, YAML 설정 로드
+  - open/read/reset/close, context manager 및 반복 재생
 - `app/video/frame_processor.py`
-  - VideoSource와 Detector 호출
-  - Detection bbox 및 성능 지표 렌더링
-  - `ProcessedFrame`과 inference latency 반환
-  - 기본 구현은 병합됐으나 아래 호환성 문제 수정과 통합 검증이 필요
+  - Detection → Tracking → Trajectory 호출
+  - Detection/Tracking bbox와 FPS/latency 렌더링
+  - 원본 `FramePacket`을 변경하지 않고 `rendered_frame`을 별도 반환
+  - 아직 Zone → Risk → Event → Alert 호출은 연결하지 않음
+- `app/tracking/tracker.py`, `app/tracking/trajectory.py`
+  - 공통 `Tracker` 계약, 단순 추적기와 ByteTrack adapter
+  - `TrackedObject`, Track History, 이동거리, 방향 및 pixel 속도 계산
+- `app/zones/`
+  - 작업자 bottom-center와 bbox 포함/확대 geometry
+  - 지게차·컨베이어·로봇팔 bbox 기반 Warning/Critical Zone 생성
+  - `ZoneManager`가 프레임별 `ZoneFrameResult`를 생성
+- `app/risk/`
+  - `NORMAL/WARNING/CRITICAL` 위험등급
+  - 작업자 bottom-center와 설비 bbox Zone, `is_active`를 조합한 순수 규칙
+  - 모든 작업자-설비 조합에 대한 `RiskAssessment` 생성
+- 설정과 테스트
+  - `requirements.txt`와 `config/*.yaml`의 기본 골격 작성
+  - `test_video_source.py`, `test_frame_processor.py`, `test_tracking.py`, `test_trajectory.py`, `test_zones.py`, `test_risk.py`
+  - 2026-09-22 기준 `pytest`: 36 passed, `python -m compileall -q app`: 통과
 
-### 아직 구현되지 않음
+### 모델 아티팩트 상태
 
-- 위 세 파일을 제외한 대부분의 Python, YAML, 테스트 파일은 현재 빈 파일이다.
-- `models/best.pt`, `models/best.onnx`, `models/best.engine`는 빈 placeholder다.
-- `data/events.db`는 아직 초기화되지 않았다.
-- `frontend/package.json`과 `requirements.txt`는 아직 작성되지 않았다.
+- 실제 모델 파일은 Git LFS로 추적한다.
+- `models/1model_20260909.pt`: 작업자와 산업 설비 탐지용 모델
+  - class: `person`, `forklift`, `robot_arm`, `conveyor`
+- `models/2model_20260921.pt`: PPE 탐지용 모델
+  - class: `head`, `gloves`, `helmet`, `body`, `safety_vest`, `harness_body`
+- `models/1model.best.onnx`, `models/2model.best.onnx`: ONNX Runtime 및 TensorRT 변환 입력용 FP32 모델
+- `models/1model.best.engine`, `models/2model.best.engine`: 개발 PC에서 생성한 TensorRT engine
+- TensorRT engine은 GPU, CUDA, TensorRT 버전에 종속되므로 Jetson 배포 장치에서 다시 빌드한다.
+- `models/best.pt`는 0 byte placeholder이며 실행 모델로 사용하지 않는다.
+
+### 아직 구현 또는 통합되지 않음
+
+- `app/inference/pytorch_backend.py`, `tensorrt_backend.py`, `model_manager.py`는 docstring만 있는 상태다.
+- `app/main.py`는 docstring만 있어 실제 영상 End-to-End 실행 진입점이 없다.
+- `FrameProcessor`와 `ZoneManager`, `RiskEngine`, Event/Alert는 아직 하나의 실행 파이프라인으로 연결되지 않았다.
+- `app/equipment/` 상태 분석 모듈은 아직 없고 `EquipmentZoneInfo.is_active: bool`을 임시 계약으로 사용한다.
+- `config/zones.yaml`의 Static Polygon은 현재 `ZoneManager` 런타임에 로드되지 않는다.
+- `app/alerts/`, `app/storage/`, `app/api/`, `app/video/rtsp_source.py`, Frontend는 실행 가능한 구현이 아니다.
+- Event deduplication/cooldown, DB, Snapshot, Event Clip 및 보고서는 구현되지 않았다.
 - 빈 파일이나 placeholder가 존재한다는 이유만으로 기능이 구현됐다고 판단하지 않는다.
 
-### 확인된 호환성 문제
+### 현재 차단 요소와 기술 부채
 
-- `FramePacket`은 `frozen=True`인데 현재 `frame_processor.py`는 `frame_packet.frame = frame`으로 재할당한다.
-- 이 코드는 `FrozenInstanceError`를 발생시킬 수 있으므로 Detection 영상 통합 전에 수정한다.
-- 권장 방향은 원본 `FramePacket`을 변경하지 않고 렌더링된 frame을 새 `FramePacket` 또는 `ProcessedFrame` 필드로 반환하는 것이다.
-- 편의를 위해 `frozen=True`를 제거하려면 먼저 데이터 불변성 계약 변경을 팀과 합의하고 관련 테스트와 문서를 함께 수정한다.
+- `config/model.yaml`은 아직 0 byte `models/best.pt`를 가리키며 두 모델의 서로 다른 class ID를 하나의 mapping으로 합쳐 놓았다.
+- 실행 전에 산업설비 모델과 PPE 모델의 설정을 분리하고 실제 파일 경로 및 class mapping을 각각 일치시켜야 한다.
+- 설비 상태 모듈이 없기 때문에 현재 Zone 생성 함수는 `DEFAULT_IS_ACTIVE = True`를 사용한다. 이는 보수적인 프로토타입 임시값이며 실제 상태 판정으로 교체해야 한다.
+- 설비 상태는 최종적으로 Boolean 대신 `MOVING/STOPPED/UNKNOWN` 또는 `RUNNING/STOPPED/UNKNOWN` Enum과 Temporal Smoothing을 사용한다.
+- bbox 기반 Zone과 Risk 단위 테스트는 통과하지만 실제 모델·실제 영상 기반 FPS, latency 및 경고 시나리오는 아직 검증하지 않았다.
+- `origin/feat/tracking-tuning`의 PyTorch backend와 실행 조립 코드는 `main`에 병합되지 않았으므로 검토·정리 없이 복사하거나 완료 상태로 기록하지 않는다.
 
-### 현재 테스트 영상
-
-- 저장소에 포함된 테스트 영상은 `data/samples/factory_floor_demo.mp4`다.
-- `app/video/video_source.py`의 절대 경로는 임시방편이다. `config/cameras.yaml` 구현 후 설정 기반 경로로 교체한다.
 
 ## 4. 반드시 지켜야 하는 아키텍처 규칙
 
@@ -129,18 +157,18 @@ CCTV / RTSP / Video
 로봇팔 Zone 단계:
 
 ```text
-초기: YOLO Robot Arm bbox + margin + Temporal Smoothing
-중기: Camera별 Static Polygon 또는 사전 정의 작업 반경
+초기: YOLO Robot Arm bbox + margin
+중기: Temporal Smoothing + Camera별 Static Polygon 또는 사전 정의 작업 반경
 고도화: 작동상태 + 작업반경 + Motion + 선택적 PLC 정보를 결합한 Dynamic Zone
 ```
 
-초기 로봇팔 Zone의 입력은 `Detection.bbox`, 출력은 Polygon Zone이다. `app/zones/robot_arm.py`가 생성하고 `ZoneManager`가 관리한다. margin은 `config/zones.yaml`에서 설정한다. 저비용 좌표 계산이므로 유효한 로봇팔 Detection이 있는 프레임마다 실행할 수 있다.
+현재 초기 로봇팔 Zone은 Tracking된 `TrackedObject.bbox`를 입력으로 받고, bbox 자체를 Critical Zone으로, 확대 bbox를 Warning Zone으로 반환한다. `app/zones/robot_arm.py`가 생성하고 `ZoneManager`가 프레임 결과에 포함한다. 기본 확대 비율은 아직 Python 기본값이므로 `config/zones.yaml` 로딩과 Temporal Smoothing은 중기 단계에서 연결한다.
 
 ### 위험 판단
 
 - `app/risk/risk_rules.py`: 설비별 조건, 거리와 시간 threshold 및 위험등급 매핑을 순수 규칙으로 정의한다.
 - `app/risk/risk_engine.py`: Worker, Equipment State, Zone, Distance, Trajectory, PPE 결과를 종합해 `RiskAssessment`를 반환한다.
-- 위험등급은 `NORMAL`, `CAUTION`, `WARNING`, `CRITICAL`로 통일한다.
+- 위험등급은 `NORMAL`, `WARNING`, `CRITICAL`로 통일한다.
 
 ### 이벤트와 경고
 
@@ -198,7 +226,7 @@ height: int
 
 ### `TrackedObject`
 
-정의 예정 위치: `app/tracking/tracker.py`
+정의 위치: `app/tracking/tracker.py`
 
 ```text
 track_id
@@ -213,7 +241,7 @@ timestamp
 
 ### `EquipmentStateResult`
 
-정의 예정 위치: `app/equipment/`의 공통 모델 또는 각 상태 모듈
+목표 정의 위치: `app/equipment/`의 공통 모델. 아직 구현되지 않았으며 현재 `EquipmentZoneInfo.is_active: bool`을 임시 사용한다.
 
 ```text
 track_id
@@ -225,95 +253,97 @@ confidence
 timestamp
 ```
 
-### `Zone`
+### `ZoneFrameResult`와 `EquipmentZoneInfo`
 
-정의 예정 위치: `app/zones/zone_manager.py`
+정의 위치: `app/zones/models.py`
 
 ```text
-zone_id
-camera_id
-zone_type
-equipment_track_id (optional)
-polygon
-timestamp
+ZoneFrameResult:
+  timestamp
+  frame_index
+  camera_id
+  workers: list[WorkerZoneInfo]
+  equipments: list[EquipmentZoneInfo]
+
+EquipmentZoneInfo:
+  equipment_id
+  equipment_type
+  equipment_bbox
+  warning_zone
+  critical_zone
+  is_active  # prototype-only bool, EquipmentState Enum으로 교체 예정
 ```
 
-### `RiskAssessment`와 `RiskEvent`
+### `RiskAssessment`
 
-정의 예정 위치: 각각 `app/risk/risk_engine.py`, `app/alerts/event_manager.py`
+정의 위치: `app/risk/models.py`
 
 ```text
-risk_level
-risk_type
+timestamp
+frame_index
 camera_id
-worker_track_id
-equipment_track_id
+person_id
+equipment_id
 equipment_type
-equipment_state
-distance
-zone_id
-ppe_status
-reason
-timestamp
+risk_level
 ```
+
+`RiskEvent`는 아직 정의되지 않았다. Event 구현 시 `RiskAssessment`와 생명주기 상태, deduplication key, 발생·갱신·해제 시각을 분리하여 정의한다.
 
 ORM 객체를 Detection, Tracking 또는 Risk 계층의 데이터 계약으로 사용하지 않는다.
 
-## 7. 개발 순서
+## 7. `main` 기준 다음 개발 순서
 
-다음 단계의 완료 조건을 만족한 후 다음 단계로 이동한다.
+현재 완료된 Detection 계약, 영상 입력, Tracking, Trajectory, bbox Zone, Risk 단위 로직을 기반으로 아래 순서대로 진행한다. 각 단계의 완료 조건을 만족한 후 다음 단계로 이동한다.
 
-1. **기반 설정**
-   - `requirements.txt`, `config/system.yaml`, `config/model.yaml`, `config/cameras.yaml`, `config/zones.yaml` 작성
-   - Python package용 `__init__.py` 추가
-2. **영상 입력 — 기본 구현 완료**
-   - `app/video/video_source.py`
-   - 로컬 MP4의 open/read/reset/close 검증
-3. **Detection 계약 — 기본 구현 완료**
-   - `app/inference/detector.py`
-   - bbox 좌표, confidence와 프레임 검증
-4. **PyTorch YOLO**
-   - `app/inference/pytorch_backend.py`, `app/inference/model_manager.py`
-   - 유효한 `models/best.pt` 확보
-5. **Detection 영상 통합 — 기본 구현 존재, 수정과 검증 필요**
-   - `app/video/frame_processor.py`
-   - frozen `FramePacket`을 변경하지 않도록 호환성 문제 수정
-   - 원본 좌표 bbox와 FPS/latency 확인
-6. **ByteTrack**
-   - `app/tracking/tracker.py`
-   - 동일 객체 Track ID 유지 확인
-7. **Track History / Trajectory**
-   - `app/tracking/trajectory.py`
-   - 이동거리, 방향, 속도 및 오래된 history 정리
-8. **지게차 상태**
-   - `app/equipment/forklift_state.py`
-   - jitter와 hysteresis를 반영한 MOVING/STOPPED/UNKNOWN
-9. **Geometry와 Zone**
-   - `app/zones/geometry.py`, `zone_manager.py`, `worker_zone.py`, `forklift.py`
-   - 작업자 bottom-center와 위험구역 진입 판정
-10. **Risk Engine**
-    - `app/risk/risk_rules.py`를 먼저 구현하고 `risk_engine.py`에서 조합
-11. **Event와 Alert**
-    - `app/alerts/event_manager.py`, `alert_manager.py`
-    - 중복 이벤트 제거와 cooldown 검증
-12. **SQLite Event Log**
+1. **모델 설정 분리**
+   - `config/model.yaml`을 산업설비 모델과 PPE 모델 설정으로 분리
+   - `1model_20260909.pt`, `2model_20260921.pt`의 class ID와 실제 label 순서를 각각 기록
+   - 0 byte `models/best.pt` 의존 제거
+2. **PyTorch YOLO backend**
+   - `app/inference/pytorch_backend.py`에서 `1model_20260909.pt` 로딩·추론·`Detection` 변환
+   - `app/inference/model_manager.py`에서 설정 검증, backend 선택 및 warm-up
+   - 실제 프레임에서 원본 픽셀 bbox와 confidence 검증
+3. **실행 진입점**
+   - `app/main.py`에서 CameraConfig, VideoSource, Detector, Tracker, Trajectory를 조립
+   - 종료 signal, VideoCapture와 창 자원 해제
+4. **Zone과 Risk 파이프라인 연결**
+   - `app/video/frame_processor.py`에 `ZoneManager`와 `RiskEngine` 호출 추가
+   - 반환 객체에 `ZoneFrameResult`와 `RiskAssessment`를 명시적으로 포함
+5. **프로토타입 터미널 경고**
+   - `app/alerts/alert_manager.py`에 WARNING/CRITICAL 로그 출력 구현
+   - 같은 객체 조합의 매 프레임 중복 출력은 최소한의 상태 추적으로 억제
+6. **첫 End-to-End 시현 검증**
+   - 로컬 영상 또는 Webcam → Detection → Tracking → Zone → Risk → 터미널 Alert
+   - 작업자 진입 시 WARNING/CRITICAL, 이탈 시 정상 복귀 확인
+   - FPS, 평균 latency와 P95 latency 기록
+7. **설비 상태 계약 정상화**
+   - `app/equipment/forklift_state.py`와 공통 `EquipmentStateResult` 생성
+   - `is_active: bool`을 `MOVING/STOPPED/UNKNOWN`으로 교체
+   - jitter, hysteresis와 Temporal Smoothing 테스트
+8. **Static Polygon Zone**
+   - `config/zones.yaml` 로더와 카메라별 필터링 구현
+   - bbox Zone과 관리자 Polygon의 우선순위·결합 규칙 명시
+9. **Event 생명주기**
+   - `app/alerts/event_manager.py`에 ACTIVE/RESOLVED, deduplication, cooldown 및 등급 상승 구현
+10. **저장과 증적**
     - `app/storage/models.py`, `database.py`, `event_repository.py`
-13. **Snapshot / Event Clip**
-    - `app/storage/media_repository.py`, `app/video/ring_buffer.py`
-14. **첫 End-to-End MVP**
-    - Video → Detection → Tracking → Equipment State → Zone → Risk → Alert → DB → Snapshot
-15. **로봇팔 확장**
-    - `app/equipment/robot_state.py`, `app/zones/robot_arm.py`
-16. **컨베이어 확장**
-    - `app/equipment/conveyor_state.py`, `app/zones/conveyor.py`
-17. **FastAPI / WebSocket**
-    - `app/api/` 구현 후 Frontend 연결
-18. **Risk Report**
-    - Template 기반 보고서 생성
-19. **ONNX / TensorRT / Jetson**
-    - `.pt` → `.onnx` → FP16 `.engine` 순으로 결과와 성능 비교
-20. **고도화**
-    - TTC, Dynamic Zone, Near-Miss, PPE, Pose, Fall, Adaptive Inference, Heatmap
+    - `app/storage/media_repository.py`, `app/video/ring_buffer.py`로 Snapshot/Event Clip 생성
+11. **로봇팔 상태 확장**
+    - `app/equipment/robot_state.py`에서 Robot ROI Motion 기반 `RUNNING/STOPPED/UNKNOWN`
+    - bbox + margin 초기 Zone에서 Static Polygon 중기, 상태 기반 Dynamic Zone 고도화 순으로 진행
+12. **컨베이어 상태 확장**
+    - `app/equipment/conveyor_state.py`에서 ROI Optical Flow와 방향 일관성 분석
+13. **PPE Trigger 추론**
+    - 작업자가 위험 Zone에 접근할 때만 `2model_20260921.pt` 실행
+    - 산업설비 모델과 PPE 모델의 class space 및 결과 계약을 분리
+14. **API와 Frontend**
+    - FastAPI, WebSocket, Zone CRUD, 이벤트 조회 및 시스템 상태
+15. **TensorRT와 Jetson 배포**
+    - ONNX 결과 일치 검증 후 Jetson에서 FP16 engine 재생성
+    - PyTorch/ONNX/TensorRT 정확도, FPS, latency, RAM/VRAM과 전력 비교
+16. **후속 고도화**
+    - TTC, 미래경로 Dynamic Zone, Near-Miss, Pose, Fall, Adaptive Inference, Heatmap 및 Risk Report
 
 ## 8. Edge 실행 정책
 
