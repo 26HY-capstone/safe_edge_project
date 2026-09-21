@@ -246,6 +246,22 @@ def _read_display_frame(camera_view: CameraViewState) -> np.ndarray:
     if not camera_view.enabled:
         return _make_blank_tile(f"{video_source.camera_id}: off")
 
+    if camera_view.processor is not None:
+        try:
+            processed_frame = camera_view.processor.process_next()
+        except (FileNotFoundError, VideoSourceError):
+            return _make_blank_tile(f"{video_source.camera_id}: no input")
+
+        if processed_frame is None:
+            return _make_blank_tile(f"{video_source.camera_id}: no frame")
+
+        frame = processed_frame.rendered_frame
+        if frame is None:
+            frame = processed_frame.frame_packet.frame
+
+        frame = _resize_tile(frame)
+        return _draw_camera_label(frame=frame, label=video_source.camera_id)
+
     try:
         frame_packet = video_source.read()
     except (FileNotFoundError, VideoSourceError):
