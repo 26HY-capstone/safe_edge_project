@@ -8,9 +8,15 @@ from app.zones.models import EquipmentType, EquipmentZoneInfo
 DEFAULT_WARNING_SCALE = 1.2
 
 
+# 설비 작동 여부를 실제로 판단하는 app/equipment/robot_state.py가 아직 구현되지 않았으므로
+# 임시로 항상 작동 중(True)으로 간주한다. 해당 모듈이 추가되면 그 판단 결과를 전달하도록 교체한다.
+DEFAULT_IS_ACTIVE = True
+
+
 def create_robot_arm_zone_info(
     tracked_object: TrackedObject,
     warning_scale: float = DEFAULT_WARNING_SCALE,
+    is_active: bool = DEFAULT_IS_ACTIVE,
 ) -> EquipmentZoneInfo:
     equipment_bbox = tracked_object.bbox
 
@@ -26,6 +32,7 @@ def create_robot_arm_zone_info(
         equipment_bbox=equipment_bbox,
         warning_zone=warning_zone,
         critical_zone=critical_zone,
+        is_active=is_active,
     )
 
 
