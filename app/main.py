@@ -12,6 +12,7 @@ from app.inference.detector import Detector
 from app.inference.pytorch_backend import create_pytorch_detector_from_model_config
 from app.tracking.tracker import Tracker, create_tracker_from_system_config
 from app.tracking.trajectory import TrajectoryAnalyzer
+from app.video.frame_processor import FrameProcessor
 from app.video.sample_dataset import create_random_ceiling_eye_video_sources
 from app.video.video_source import (
     CameraConfig,
@@ -43,6 +44,7 @@ class ProcessingComponents:
 @dataclass(slots=True)
 class CameraViewState:
     video_source: VideoSource
+    processor: FrameProcessor | None = None
     enabled: bool = True
 
 
@@ -69,10 +71,16 @@ def main() -> None:
     """설정된 영상 입력을 최대 4개까지 한 창의 2x2 화면으로 표시한다."""
     camera_configs = load_camera_configs()
     video_sources = _create_display_video_sources(camera_configs)
-    _processing_components = _create_processing_components(video_sources)
+    processing_components = _create_processing_components(video_sources)
     display_state = DisplayState(
         camera_views=[
-            CameraViewState(video_source=video_source)
+            CameraViewState(
+                video_source=video_source,
+                processor=_create_frame_processor(
+                    video_source=video_source,
+                    processing_components=processing_components,
+                ),
+            )
             for video_source in video_sources
         ],
         button_bounds=[],
@@ -167,6 +175,31 @@ def _create_detector() -> Detector | None:
 def _create_tracker() -> Tracker:
     """system.yaml 기반 tracker를 생성한다."""
     return create_tracker_from_system_config(SYSTEM_CONFIG_PATH)
+
+
+def _create_frame_processor(
+    video_source: VideoSource,
+    processing_components: ProcessingComponents,
+) -> FrameProcessor | None:
+    """detector가 준비된 입력에 FrameProcessor를 연결한다."""
+    if processing_components.detector is None:
+        return None
+
+    tracker = processing_components.trackers.get(video_source.camera_id)
+    trajectory_analyzer = processing_components.trajectory_analyzers.get(
+        video_source.camera_id
+    )
+    if tracker is None or trajectory_analyzer is None:
+        return None
+
+    return FrameProcessor(
+        video_source=video_source,
+        detector=processing_components.detector,
+        tracker=tracker,
+        trajectory_analyzer=trajectory_analyzer,
+        draw_bbox=True,
+        draw_metrics=True,
+    )
 
 
 def _create_display_video_sources(

@@ -1,7 +1,15 @@
 """main 실행 입력 구성 로직을 검증하는 테스트."""
 
 from app import main
+from app.inference.detector import Detector
+from app.tracking.tracker import SimpleTracker
+from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.video_source import CameraConfig, VideoSource
+
+
+class _FakeDetector(Detector):
+    def detect(self, frame):
+        return []
 
 
 def test_create_display_video_sources_puts_sample_sources_on_bottom(
@@ -86,6 +94,44 @@ def test_create_processing_components_uses_per_source_state(monkeypatch) -> None
         components.trajectory_analyzers["camera-0"]
         is not components.trajectory_analyzers["camera-1"]
     )
+
+
+def test_create_frame_processor_returns_none_without_detector() -> None:
+    video_source = VideoSource(source=0, camera_id="camera-0")
+    components = main.ProcessingComponents(
+        detector=None,
+        trackers={},
+        trajectory_analyzers={},
+    )
+
+    processor = main._create_frame_processor(
+        video_source=video_source,
+        processing_components=components,
+    )
+
+    assert processor is None
+
+
+def test_create_frame_processor_uses_matching_source_state() -> None:
+    video_source = VideoSource(source=0, camera_id="camera-0")
+    tracker = SimpleTracker()
+    trajectory_analyzer = TrajectoryAnalyzer()
+    components = main.ProcessingComponents(
+        detector=_FakeDetector(),
+        trackers={"camera-0": tracker},
+        trajectory_analyzers={"camera-0": trajectory_analyzer},
+    )
+
+    processor = main._create_frame_processor(
+        video_source=video_source,
+        processing_components=components,
+    )
+
+    assert processor is not None
+    assert processor.video_source is video_source
+    assert processor.detector is components.detector
+    assert processor.tracker is tracker
+    assert processor.trajectory_analyzer is trajectory_analyzer
 
 
 def test_toggle_camera_view_closes_source_when_disabled(monkeypatch) -> None:
