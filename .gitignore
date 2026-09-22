@@ -31,14 +31,16 @@ htmlcov/
 logs/
 
 # Model weights / exported models
-# *.pt
-# *.pth
-# *.onnx
-# *.engine
-# *.torchscript
-# *.tflite
-# *.pb
-# *.mlmodel
+models/*
+!models/.gitkeep
+*.pt
+*.pth
+*.onnx
+*.engine
+*.torchscript
+*.tflite
+*.pb
+*.mlmodel
 
 # Training outputs
 runs/
@@ -52,7 +54,8 @@ data/datasets/
 *.cache
 
 # Video data
-data/samples/
+data/samples/*
+!data/samples/.gitkeep
 *.mp4
 *.mov
 *.avi
