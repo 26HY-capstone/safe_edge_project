@@ -5,9 +5,10 @@ detector:
   # backend는 pytorch, onnx, tensorrt 중 실행 환경에 맞게 선택한다.
   backend: pytorch
   model_path: models/best.pt
+  fallback_model_name: yolo26n.pt
   device: cpu
   input_size: 640
-  confidence_threshold: 0.35
+  confidence_threshold: 0.25
   iou_threshold: 0.45
 
   # 모델 출력 class ID와 서비스 내부 class 이름의 매핑.

@@ -12,9 +12,9 @@ import cv2
 import numpy as np
 import yaml
 
-TEMP_DEFAULT_VIDEO_PATH = (
-    Path(__file__).resolve().parents[2] / "data" / "samples" / "factory_floor_demo.mp4"
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "config" / "cameras.yaml"
+TEMP_DEFAULT_VIDEO_PATH = PROJECT_ROOT / "data" / "samples" / "factory_floor_demo.mp4"
 # OpenCV VideoCapture 입력: 파일 경로 또는 카메라 번호.
 VideoInput = str | Path | int
 
@@ -168,10 +168,12 @@ class VideoSource:
 
 
 def load_camera_configs(
-    config_path: str | Path = "config/cameras.yaml",
+    config_path: str | Path = DEFAULT_CAMERA_CONFIG_PATH,
 ) -> list[CameraConfig]:
     """cameras.yaml에서 카메라 입력 설정 목록을 읽는다."""
-    with Path(config_path).open("r", encoding="utf-8") as config_file:
+    resolved_config_path = _resolve_project_path(config_path)
+
+    with resolved_config_path.open("r", encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file) or {}
 
     if not isinstance(config, Mapping):
@@ -186,7 +188,7 @@ def load_camera_configs(
 
 def get_camera_config(
     camera_id: str | None = None,
-    config_path: str | Path = "config/cameras.yaml",
+    config_path: str | Path = DEFAULT_CAMERA_CONFIG_PATH,
 ) -> CameraConfig:
     """camera_id가 지정되면 해당 카메라를, 없으면 첫 번째 카메라를 반환한다."""
     cameras = load_camera_configs(config_path)
@@ -209,15 +211,19 @@ def create_video_source_from_config(camera_config: CameraConfig) -> VideoSource:
             f"Unsupported VideoSource camera type: {camera_config.camera_type}"
         )
 
+    source = camera_config.source
+    if isinstance(source, Path):
+        source = _resolve_project_path(source)
+
     return VideoSource(
-        source=camera_config.source,
+        source=source,
         camera_id=camera_config.camera_id,
         loop=camera_config.loop,
     )
 
 
 def create_video_source_from_cameras_config(
-    config_path: str | Path = "config/cameras.yaml",
+    config_path: str | Path = DEFAULT_CAMERA_CONFIG_PATH,
     camera_id: str | None = None,
 ) -> VideoSource:
     """cameras.yaml의 선택된 카메라 설정으로 VideoSource를 생성한다."""
@@ -293,7 +299,17 @@ def _optional_float(value: object) -> float | None:
     if isinstance(value, bool):
         raise ValueError("float config value must not be boolean")
     if isinstance(value, float):
-            return value
-    if isinstance(value, int | float | str):
+        return value
+    if isinstance(value, int | str):
         return float(value)
     raise ValueError("float config value must be int, float, or str")
+
+
+def _resolve_project_path(path: str | Path) -> Path:
+    """상대경로를 현재 실행 위치가 아니라 프로젝트 루트 기준으로 해석한다."""
+    resolved_path = Path(path).expanduser()
+    if resolved_path.is_absolute():
+        return resolved_path
+    if resolved_path.is_file():
+        return resolved_path
+    return PROJECT_ROOT / resolved_path

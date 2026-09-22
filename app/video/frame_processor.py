@@ -130,6 +130,7 @@ class FrameProcessor:
         detections: list[Detection],
     ) -> None:
         frame_height, frame_width = frame.shape[:2]
+        font_scale, thickness = _overlay_style(frame_height)
 
         for detection in detections:
             x1, y1, x2, y2 = detection.bbox
@@ -146,7 +147,7 @@ class FrameProcessor:
                 (x1, y1),
                 (x2, y2),
                 (0, 255, 0),
-                2,
+                thickness,
             )
 
             label = (
@@ -157,11 +158,11 @@ class FrameProcessor:
             cv2.putText(
                 frame,
                 label,
-                (x1, max(y1 - 10, 20)),
+                (x1, max(y1 - 10, int(24 * font_scale))),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
+                font_scale,
                 (0, 255, 0),
-                2,
+                thickness,
             )
 
     def _draw_tracked_objects(
@@ -170,6 +171,7 @@ class FrameProcessor:
         tracked_objects: list[TrackedObject],
     ) -> None:
         frame_height, frame_width = frame.shape[:2]
+        font_scale, thickness = _overlay_style(frame_height)
 
         for tracked_object in tracked_objects:
             x1, y1, x2, y2 = tracked_object.bbox
@@ -186,7 +188,7 @@ class FrameProcessor:
                 (x1, y1),
                 (x2, y2),
                 (255, 200, 0),
-                2,
+                thickness,
             )
 
             label = (
@@ -198,11 +200,11 @@ class FrameProcessor:
             cv2.putText(
                 frame,
                 label,
-                (x1, max(y1 - 10, 20)),
+                (x1, max(y1 - 10, int(24 * font_scale))),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
+                font_scale,
                 (255, 200, 0),
-                2,
+                thickness,
             )
 
     def _draw_metrics(
@@ -212,32 +214,43 @@ class FrameProcessor:
         inference_latency_ms: float,
         processing_fps: float,
     ) -> None:
+        font_scale, thickness = _overlay_style(frame.shape[0])
+        line_height = int(34 * font_scale)
+        margin = int(20 * font_scale)
+
         cv2.putText(
             frame,
             f"Source FPS: {source_fps:.1f}",
-            (20, 30),
+            (margin, margin + line_height),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
+            font_scale,
             (255, 255, 255),
-            2,
+            thickness,
         )
 
         cv2.putText(
             frame,
             f"Inference FPS: {processing_fps:.1f}",
-            (20, 60),
+            (margin, margin + line_height * 2),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
+            font_scale,
             (255, 255, 255),
-            2,
+            thickness,
         )
 
         cv2.putText(
             frame,
             f"Latency: {inference_latency_ms:.1f} ms",
-            (20, 90),
+            (margin, margin + line_height * 3),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
+            font_scale,
             (255, 255, 255),
-            2,
+            thickness,
         )
+
+
+def _overlay_style(frame_height: int) -> tuple[float, int]:
+    """원본 프레임에 먼저 그린 뒤 축소해도 라벨이 읽히도록 해상도 비례 스타일을 계산한다."""
+    font_scale = max(0.7, frame_height / 600.0)
+    thickness = max(2, round(frame_height / 360.0))
+    return font_scale, thickness

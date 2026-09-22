@@ -45,10 +45,12 @@ class Detection:
 
     @property
     def width(self) -> float:
+        # x2 - x1
         return self.bbox[2] - self.bbox[0]
 
     @property
     def height(self) -> float:
+        # y2 - y1
         return self.bbox[3] - self.bbox[1]
 
     @property

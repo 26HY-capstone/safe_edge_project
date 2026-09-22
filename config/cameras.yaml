@@ -2,12 +2,13 @@
 # RTSP 인증정보는 환경변수나 별도 비밀 설정으로 주입한다.
 
 cameras:
-  # 로컬 영상 입력.
-  - camera_id: factory-floor-demo
-    name: Factory Floor Demo
-    type: video
-    source: data/samples/factory_floor_demo.mp4
-    loop: true
+  # RTSP 카메라 설정 형식.
+#   - camera_id: factory-rtsp-01
+#     name: Factory RTSP Camera 01
+#     type: rtsp
+#     source: rtsp://user:password@camera-host/stream
+#     reconnect_seconds: 3
+#     stale_frame_timeout_seconds: 2
 
   # 웹캠 입력. OpenCV에서는 기본 카메라가 보통 0번이다.
   - camera_id: laptop-camera
@@ -18,12 +19,10 @@ cameras:
     height: 720
     fps: 30
     loop: false
-
-# RTSP 카메라 설정 형식.
-# cameras:
-#   - camera_id: factory-rtsp-01
-#     name: Factory RTSP Camera 01
-#     type: rtsp
-#     source: rtsp://user:password@camera-host/stream
-#     reconnect_seconds: 3
-#     stale_frame_timeout_seconds: 2
+  
+  # 로컬 영상 입력.
+  - camera_id: factory-floor-demo
+    name: Factory Floor Demo
+    type: video
+    source: data/samples/warehouse_forklift_3.mp4
+    loop: true

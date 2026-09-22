@@ -6,6 +6,7 @@ import pytest
 
 from app.video.video_source import (
     CameraConfig,
+    PROJECT_ROOT,
     VideoSource,
     create_video_source_from_cameras_config,
     create_video_source_from_config,
@@ -77,7 +78,7 @@ def test_create_video_source_from_cameras_config_uses_first_camera(tmp_path) -> 
 
     assert isinstance(video_source, VideoSource)
     assert video_source.camera_id == "demo-video"
-    assert video_source.source == Path("data/samples/demo.mp4")
+    assert video_source.source == PROJECT_ROOT / "data/samples/demo.mp4"
     assert video_source.loop is True
 
 
