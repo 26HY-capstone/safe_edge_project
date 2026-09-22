@@ -167,7 +167,7 @@ def test_create_frame_processor_uses_matching_source_state() -> None:
 
 def test_toggle_camera_view_closes_source_when_disabled(monkeypatch) -> None:
     video_source = VideoSource(source=0, camera_id="camera-0")
-    camera_view = main.CameraViewState(video_source=video_source)
+    camera_view = main.CameraViewState(video_source=video_source, enabled=True)
     closed = []
 
     monkeypatch.setattr(video_source, "close", lambda: closed.append(True))
@@ -214,6 +214,7 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
                 rendered_frame=rendered_frame,
             )
         ),
+        enabled=True,
     )
 
     display_frame = main._read_display_frame(camera_view)

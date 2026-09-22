@@ -13,8 +13,8 @@ tracking:
   track_threshold: 0.5
   low_track_threshold: 0.1
   new_track_threshold: 0.5
-  match_threshold: 0.3
-  track_buffer: 30
+  match_threshold: 0.7
+  track_buffer: 60
   fuse_score: true
   history_seconds: 5
   max_lost_frames: 30

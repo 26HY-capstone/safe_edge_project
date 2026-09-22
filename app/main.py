@@ -45,7 +45,7 @@ class ProcessingComponents:
 class CameraViewState:
     video_source: VideoSource
     processor: FrameProcessor | None = None
-    enabled: bool = True
+    enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,15 +323,16 @@ def _make_blank_tile(label: str) -> np.ndarray:
 
 def _draw_camera_label(frame: np.ndarray, label: str) -> np.ndarray:
     """타일 왼쪽 위에 카메라 식별자를 표시한다."""
-    cv2.putText(
-        frame,
-        label,
-        (20, 35),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (0, 255, 255),
-        2,
-    )
+    # 임시 비활성화: 화면 확인 시 카메라 이름이 detection 라벨과 겹치지 않도록 표시하지 않는다.
+    # cv2.putText(
+    #     frame,
+    #     label,
+    #     (20, 35),
+    #     cv2.FONT_HERSHEY_SIMPLEX,
+    #     0.8,
+    #     (0, 255, 255),
+    #     2,
+    # )
     return frame
 
 
