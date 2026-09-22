@@ -78,3 +78,6 @@ data/snapshots/
 data/events.db
 
 *.pdf
+
+# local report
+reports/
