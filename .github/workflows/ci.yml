@@ -28,5 +28,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run tests
-        run: pytest
+      - name: Run tests and generate reports
+        run: |
+          pytest \
+            --html=reports/test-report.html \
+            --self-contained-html \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=html:reports/coverage
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports
+          path: reports/
+          retention-days: 14
