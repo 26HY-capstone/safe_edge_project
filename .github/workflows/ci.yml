@@ -1,13 +1,13 @@
 name: Python CI
 
 on:
-  pull_request:
-    branches:
-      - main
-
   push:
-    branches:
-      - main
+  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
   test:
@@ -30,6 +30,8 @@ jobs:
 
       - name: Run tests and generate reports
         run: |
+          mkdir -p reports
+
           pytest \
             --html=reports/test-report.html \
             --self-contained-html \
@@ -37,10 +39,44 @@ jobs:
             --cov-report=term-missing \
             --cov-report=html:reports/coverage
 
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Create report index
+        run: |
+          cat > reports/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="ko">
+          <head>
+            <meta charset="UTF-8">
+            <title>Safe Edge Project CI Report</title>
+          </head>
+          <body>
+            <h1>Safe Edge Project CI Report</h1>
+            <ul>
+              <li><a href="test-report.html">Pytest Test Report</a></li>
+              <li><a href="coverage/index.html">Coverage Report</a></li>
+            </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload reports for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: pytest-reports
           path: reports/
-          retention-days: 14
+
+  deploy-pages:
+    needs: test
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy reports to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
