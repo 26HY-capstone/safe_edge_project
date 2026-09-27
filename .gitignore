@@ -36,6 +36,8 @@ models/*
 *.pt
 *.pth
 *.onnx
+# Local 10-class prototype export; never commit this exact artifact.
+/models/model.onnx
 *.engine
 *.torchscript
 *.tflite
