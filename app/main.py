@@ -12,7 +12,7 @@ import numpy as np
 from app.alerts.alert_renderer import draw_alert_overlay
 from app.alerts.event_manager import EventManager
 from app.alerts.models import CameraAlertUpdate
-from app.alerts.sound import LocalSoundPlayer, get_requested_sound_level
+from app.alerts.sound import LocalSoundPlayer
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
 from app.risk.risk_engine import RiskEngine
@@ -36,6 +36,11 @@ TILE_WIDTH = 640
 TILE_HEIGHT = 360
 MAX_VIEW_COUNT = 4
 DEFAULT_SAMPLE_DIR = PROJECT_ROOT / "data" / "samples" / "forklift_human_nearmiss"
+# cam_03(ceiling)/cam_04(eye)에 쓸 샘플 영상을 고정하고 싶을 때만 정수로 지정한다.
+# None이면 실행마다 무작위로 run/ceiling/eye가 선택된다. 값을 바꿔가며 실행해 터미널의
+# "[sample video] cam_03: ..." 출력으로 원하는 파일이 나오는 seed를 찾으면 된다.
+# 현재 테스트 가능한 seed 번호: 4, 7, 
+SAMPLE_VIDEO_SEED: int | None = 14
 MODEL_CONFIG_PATH = PROJECT_ROOT / "config" / "model.yaml"
 SYSTEM_CONFIG_PATH = PROJECT_ROOT / "config" / "system.yaml"
 
@@ -100,6 +105,12 @@ def main() -> None:
     camera_configs = load_camera_configs()
     video_sources = _create_display_video_sources(camera_configs)
     _assign_display_camera_ids(video_sources)
+
+    # cam_03/04는 실행마다 샘플 ceiling/eye 영상이 무작위로 바뀌어
+    # 영상 확인을 위해 디버깅용으로 실행 시 한 번 터미널에 출력한다.
+    for video_source in video_sources[2:4]:
+        print(f"[sample video] {video_source.camera_id}: {video_source.source}")
+
     processing_components = _create_processing_components(video_sources)
 
     # Risk Log: 화면 슬롯 4개에 대응하는 로그 파일을 시작 시 한 번만 초기화한다.
@@ -152,7 +163,7 @@ def main() -> None:
                 for result in results
                 if result.alert_update is not None
             ]
-            _dispatch_sound_alert(alert_updates, sound_player)
+            _dispatch_sound_alert(alert_updates, sound_player, now)
 
             display_frame, button_bounds = _compose_2x2_grid(
                 frames=frames,
@@ -311,6 +322,7 @@ def _create_sample_video_sources() -> list[VideoSource]:
         return create_random_ceiling_eye_video_sources(
             sample_dir=DEFAULT_SAMPLE_DIR,
             loop=True,
+            seed=SAMPLE_VIDEO_SEED,
         )
     except (FileNotFoundError, ValueError):
         return []
@@ -415,15 +427,15 @@ def _read_display_frame(
 def _dispatch_sound_alert(
     alert_updates: list[CameraAlertUpdate],
     sound_player: LocalSoundPlayer,
+    now: float,
 ) -> None:
-    """이번 display cycle에서 모은 CameraAlertUpdate들로 Sound 재생 여부를 한 번만 판단한다.
+    """이번 display cycle에서 모은 CameraAlertUpdate 전체로 Sound 상태를 한 번 갱신한다.
 
-    여러 camera에서 동시에 신규 위험 이벤트가 발생해도 get_requested_sound_level이
-    가장 높은 등급 하나만 돌려주므로, 여기서는 그 결과가 있을 때만 1회 play()를 호출한다.
+    "최초 진입/escalation만 즉시 반응", "위험 유지 시 3초마다 반복 알림" 같은 실제
+    판단은 LocalSoundPlayer.update()가 전담한다. 이 함수는 orchestration 계층에서
+    그 호출을 한 번만 하도록 묶어주는 역할만 한다.
     """
-    requested_sound_level = get_requested_sound_level(alert_updates)
-    if requested_sound_level is not None:
-        sound_player.play(requested_sound_level)
+    sound_player.update(alert_updates, now)
 
 
 def _compose_2x2_grid(
