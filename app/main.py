@@ -11,6 +11,8 @@ import numpy as np
 
 from app.alerts.alert_renderer import draw_alert_overlay
 from app.alerts.event_manager import EventManager
+from app.alerts.models import CameraAlertUpdate
+from app.alerts.sound import LocalSoundPlayer, get_requested_sound_level
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
 from app.risk.risk_engine import RiskEngine
@@ -79,6 +81,20 @@ class DisplayState:
     button_bounds: list[ButtonBounds]
 
 
+@dataclass(slots=True)
+class DisplayFrameResult:
+    """_read_display_frame() 한 번의 결과: 화면에 쓸 frame과 Sound 판단용 Alert 결과.
+
+    frame은 camera OFF/분석 불가 상태에서도 항상 채워진다(blank tile 또는 raw frame).
+    alert_update는 이번 cycle에 Risk 분석이 실제로 성공해 EventManager가 그 camera의
+    Alert 상태를 갱신한 경우에만 채워지고, 그 외에는 None이다. main loop는 이 None 여부로
+    "Sound 판단에 포함할 camera"를 걸러낸다.
+    """
+
+    frame: np.ndarray
+    alert_update: CameraAlertUpdate | None
+
+
 def main() -> None:
     """설정된 영상 입력을 최대 4개까지 한 창의 2x2 화면으로 표시한다."""
     camera_configs = load_camera_configs()
@@ -95,6 +111,11 @@ def main() -> None:
     # 프레임마다 새로 만들면 3초 hold가 매번 초기화돼버린다. 실행 중 단 하나만
     # 만들어 계속 재사용한다.
     event_manager = EventManager()
+
+    # Sound Alert: LocalSoundPlayer는 현재 재생 중인 process/RiskLevel을 들고 있는
+    # stateful 객체라 프레임마다 새로 만들면 재생 중인 소리를 추적할 수 없다.
+    # EventManager와 마찬가지로 실행 중 단 하나만 만들어 계속 재사용한다.
+    sound_player = LocalSoundPlayer()
 
     display_state = DisplayState(
         camera_views=[
@@ -118,10 +139,21 @@ def main() -> None:
             # 한 번의 2x2 화면 갱신에서는 모든 camera가 같은 now를 기준으로
             # blink를 계산하도록 루프당 한 번만 시각을 읽는다.
             now = time.monotonic()
-            frames = [
+            results = [
                 _read_display_frame(camera_view, risk_logger, event_manager, now)
                 for camera_view in display_state.camera_views
             ]
+            frames = [result.frame for result in results]
+
+            # Sound Alert: 이번 cycle에서 분석이 성공한 camera들의 CameraAlertUpdate만
+            # 모아(개별 camera 처리 즉시가 아니라) 한 번만 Sound 판단을 수행한다.
+            alert_updates = [
+                result.alert_update
+                for result in results
+                if result.alert_update is not None
+            ]
+            _dispatch_sound_alert(alert_updates, sound_player)
+
             display_frame, button_bounds = _compose_2x2_grid(
                 frames=frames,
                 camera_views=display_state.camera_views,
@@ -132,6 +164,7 @@ def main() -> None:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
+        sound_player.close()
         for camera_view in display_state.camera_views:
             camera_view.video_source.close()
         cv2.destroyAllWindows()
@@ -302,20 +335,35 @@ def _read_display_frame(
     risk_logger: RiskLogger,
     event_manager: EventManager,
     now: float,
-) -> np.ndarray:
-    """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다."""
+) -> DisplayFrameResult:
+    """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다.
+
+    alert_update는 이번 호출에서 Risk 분석이 실제로 성공해 EventManager가 그
+    camera의 Alert 상태를 갱신한 경우에만 채워진다(Sound 판단에서 이 camera를
+    포함시키기 위함). camera OFF, 입력 실패, processor 없음 등 분석이 아예
+    이뤄지지 않은 경우에는 항상 None이다.
+    """
     video_source = camera_view.video_source
     if not camera_view.enabled:
-        return _make_blank_tile(f"{video_source.camera_id}: off")
+        return DisplayFrameResult(
+            frame=_make_blank_tile(f"{video_source.camera_id}: off"),
+            alert_update=None,
+        )
 
     if camera_view.processor is not None:
         try:
             processed_frame = camera_view.processor.process_next()
         except (FileNotFoundError, VideoSourceError):
-            return _make_blank_tile(f"{video_source.camera_id}: no input")
+            return DisplayFrameResult(
+                frame=_make_blank_tile(f"{video_source.camera_id}: no input"),
+                alert_update=None,
+            )
 
         if processed_frame is None:
-            return _make_blank_tile(f"{video_source.camera_id}: no frame")
+            return DisplayFrameResult(
+                frame=_make_blank_tile(f"{video_source.camera_id}: no frame"),
+                alert_update=None,
+            )
 
         # Risk Log: Zone/Risk 계산 결과를 프레임마다 JSONL로 남긴다(디버깅/검증용).
         # FrameProcessor 내부에서는 파일 I/O를 하지 않고, 호출부인 여기서 기록한다.
@@ -340,7 +388,7 @@ def _read_display_frame(
         )
         draw_alert_overlay(frame=frame, camera_alert_update=camera_alert_update, now=now)
 
-        return frame
+        return DisplayFrameResult(frame=frame, alert_update=camera_alert_update)
 
     # processor가 없는 입력(detector 비활성 등)은 Risk 분석 결과 자체가 없으므로
     # Alert badge/border를 그리지 않는다. NORMAL로 대체 표시하지 않는 것이 중요하다
@@ -348,13 +396,34 @@ def _read_display_frame(
     try:
         frame_packet = video_source.read()
     except (FileNotFoundError, VideoSourceError):
-        return _make_blank_tile(f"{video_source.camera_id}: no input")
+        return DisplayFrameResult(
+            frame=_make_blank_tile(f"{video_source.camera_id}: no input"),
+            alert_update=None,
+        )
 
     if frame_packet is None:
-        return _make_blank_tile(f"{video_source.camera_id}: no frame")
+        return DisplayFrameResult(
+            frame=_make_blank_tile(f"{video_source.camera_id}: no frame"),
+            alert_update=None,
+        )
 
     frame = _resize_tile(frame_packet.frame)
-    return _draw_camera_label(frame=frame, label=video_source.camera_id)
+    frame = _draw_camera_label(frame=frame, label=video_source.camera_id)
+    return DisplayFrameResult(frame=frame, alert_update=None)
+
+
+def _dispatch_sound_alert(
+    alert_updates: list[CameraAlertUpdate],
+    sound_player: LocalSoundPlayer,
+) -> None:
+    """이번 display cycle에서 모은 CameraAlertUpdate들로 Sound 재생 여부를 한 번만 판단한다.
+
+    여러 camera에서 동시에 신규 위험 이벤트가 발생해도 get_requested_sound_level이
+    가장 높은 등급 하나만 돌려주므로, 여기서는 그 결과가 있을 때만 1회 play()를 호출한다.
+    """
+    requested_sound_level = get_requested_sound_level(alert_updates)
+    if requested_sound_level is not None:
+        sound_player.play(requested_sound_level)
 
 
 def _compose_2x2_grid(

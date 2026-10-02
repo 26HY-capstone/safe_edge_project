@@ -284,12 +284,41 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
     )
 
     # risk_assessments가 비어 있어 RiskLogger.log()는 아무 파일도 쓰지 않는다.
-    display_frame = main._read_display_frame(
+    result = main._read_display_frame(
         camera_view, RiskLogger(), EventManager(), now=0.0
     )
 
-    assert display_frame.shape == (main.TILE_HEIGHT, main.TILE_WIDTH, 3)
-    assert display_frame.mean() > 0
+    assert result.frame.shape == (main.TILE_HEIGHT, main.TILE_WIDTH, 3)
+    assert result.frame.mean() > 0
+    assert result.alert_update is not None
+
+
+def test_read_display_frame_result_alert_update_is_none_when_camera_off() -> None:
+    camera_view = main.CameraViewState(
+        video_source=VideoSource(source=0, camera_id="camera-0"),
+        processor=_FakeProcessor(None),
+        enabled=False,
+    )
+
+    result = main._read_display_frame(
+        camera_view, RiskLogger(), EventManager(), now=0.0
+    )
+
+    assert result.alert_update is None
+
+
+def test_read_display_frame_result_alert_update_is_none_without_processor() -> None:
+    camera_view = main.CameraViewState(
+        video_source=VideoSource(source=0, camera_id="camera-0"),
+        processor=None,
+        enabled=True,
+    )
+
+    result = main._read_display_frame(
+        camera_view, RiskLogger(), EventManager(), now=0.0
+    )
+
+    assert result.alert_update is None
 
 
 # ---------------------------------------------------------------------------
