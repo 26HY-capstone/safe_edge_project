@@ -7,12 +7,13 @@ import numpy as np
 from app import main
 from app.alerts.event_manager import EventManager
 from app.inference.detector import Detector
+from app.risk.models import RiskAssessment, RiskLevel
 from app.risk.risk_engine import RiskEngine
 from app.risk.risk_logger import RiskLogger
 from app.tracking.tracker import SimpleTracker
 from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.video_source import CameraConfig, FramePacket, VideoSource
-from app.zones.models import ZoneFrameResult
+from app.zones.models import EquipmentType, EquipmentZoneInfo, WorkerZoneInfo, ZoneFrameResult
 from app.zones.zone_manager import ZoneManager
 
 
@@ -289,3 +290,145 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
 
     assert display_frame.shape == (main.TILE_HEIGHT, main.TILE_WIDTH, 3)
     assert display_frame.mean() > 0
+
+
+# ---------------------------------------------------------------------------
+# Alert UI orchestration
+#
+# 실제 badge/border 렌더링 결과(픽셀)는 tests/test_alert_renderer.py에서
+# app.alerts.alert_renderer를 직접 검증한다. 여기서는 main._read_display_frame이
+# EventManager와 renderer를 "올바른 시점에 올바른 값으로" 연결하는지만 본다.
+# ---------------------------------------------------------------------------
+
+
+def test_read_display_frame_passes_event_manager_result_to_renderer(
+    monkeypatch, tmp_path
+) -> None:
+    """분석이 성공하면 EventManager.update() 결과가 그대로 renderer에 전달돼야 한다."""
+    received_updates = []
+    monkeypatch.setattr(
+        main,
+        "draw_alert_overlay",
+        lambda frame, camera_alert_update, now: received_updates.append(camera_alert_update),
+    )
+
+    camera_view = main.CameraViewState(
+        video_source=VideoSource(source=0, camera_id="cam_01"),
+        processor=_FakeProcessor(
+            _FakeProcessedFrame(
+                frame_packet=_frame_packet(),
+                rendered_frame=np.zeros((100, 100, 3), dtype=np.uint8),
+            )
+        ),
+        enabled=True,
+    )
+
+    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), EventManager(), now=5.0)
+
+    assert len(received_updates) == 1
+    assert received_updates[0].camera_id == "cam_01"
+    assert received_updates[0].current_level == RiskLevel.NORMAL
+
+
+def test_read_display_frame_does_not_call_renderer_when_camera_off(
+    monkeypatch, tmp_path
+) -> None:
+    calls = []
+    monkeypatch.setattr(main, "draw_alert_overlay", lambda **kwargs: calls.append(kwargs))
+
+    camera_view = main.CameraViewState(
+        video_source=VideoSource(source=0, camera_id="cam_01"),
+        processor=_FakeProcessor(None),
+        enabled=False,
+    )
+
+    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), EventManager(), now=0.0)
+
+    assert calls == []
+
+
+def test_read_display_frame_does_not_call_renderer_when_no_processed_frame(
+    monkeypatch, tmp_path
+) -> None:
+    calls = []
+    monkeypatch.setattr(main, "draw_alert_overlay", lambda **kwargs: calls.append(kwargs))
+
+    camera_view = main.CameraViewState(
+        video_source=VideoSource(source=0, camera_id="cam_01"),
+        processor=_FakeProcessor(None),
+        enabled=True,
+    )
+
+    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), EventManager(), now=0.0)
+
+    assert calls == []
+
+
+def test_read_display_frame_updates_independent_alert_state_per_camera(
+    monkeypatch, tmp_path
+) -> None:
+    """서로 다른 camera_id에 대한 호출은 EventManager에서 독립적인
+    CameraAlertUpdate를 받아와야 한다."""
+    received_updates = {}
+    monkeypatch.setattr(
+        main,
+        "draw_alert_overlay",
+        lambda frame, camera_alert_update, now: received_updates.__setitem__(
+            camera_alert_update.camera_id, camera_alert_update
+        ),
+    )
+
+    event_manager = EventManager()
+    risk_logger = RiskLogger(log_dir=tmp_path)
+
+    worker = WorkerZoneInfo(
+        person_id=1, person_bbox=(0.0, 0.0, 10.0, 10.0), bottom_center=(5.0, 10.0)
+    )
+    equipment = EquipmentZoneInfo(
+        equipment_id=1,
+        equipment_type=EquipmentType.FORKLIFT,
+        equipment_bbox=(0.0, 0.0, 20.0, 20.0),
+        warning_zone=(-5.0, -5.0, 25.0, 25.0),
+        critical_zone=(0.0, 0.0, 20.0, 20.0),
+        is_active=True,
+    )
+
+    def _view_with_risk(camera_id: str, risk_level: RiskLevel) -> main.CameraViewState:
+        return main.CameraViewState(
+            video_source=VideoSource(source=0, camera_id=camera_id),
+            processor=_FakeProcessor(
+                _FakeProcessedFrame(
+                    frame_packet=_frame_packet(),
+                    rendered_frame=np.zeros((100, 100, 3), dtype=np.uint8),
+                    zone_result=ZoneFrameResult(
+                        timestamp=0.0,
+                        frame_index=0,
+                        camera_id=camera_id,
+                        workers=[worker],
+                        equipments=[equipment],
+                    ),
+                    risk_assessments=[
+                        RiskAssessment(
+                            timestamp=0.0,
+                            frame_index=0,
+                            camera_id=camera_id,
+                            person_id=1,
+                            equipment_id=1,
+                            equipment_type=EquipmentType.FORKLIFT,
+                            risk_level=risk_level,
+                        )
+                    ],
+                )
+            ),
+            enabled=True,
+        )
+
+    main._read_display_frame(
+        _view_with_risk("cam_01", RiskLevel.WARNING), risk_logger, event_manager, now=0.0
+    )
+    main._read_display_frame(
+        _view_with_risk("cam_03", RiskLevel.CRITICAL), risk_logger, event_manager, now=0.0
+    )
+
+    assert received_updates["cam_01"].current_level == RiskLevel.WARNING
+    assert received_updates["cam_03"].current_level == RiskLevel.CRITICAL
