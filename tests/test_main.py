@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from app import main
-from app.alerts.event_manager import EventManager
+from app.alerts.alert_manager import AlertManager
 from app.inference.detector import Detector
 from app.risk.models import RiskAssessment, RiskLevel
 from app.risk.risk_engine import RiskEngine
@@ -285,7 +285,7 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
 
     # risk_assessments가 비어 있어 RiskLogger.log()는 아무 파일도 쓰지 않는다.
     result = main._read_display_frame(
-        camera_view, RiskLogger(), EventManager(), now=0.0
+        camera_view, RiskLogger(), AlertManager(), now=0.0
     )
 
     assert result.frame.shape == (main.TILE_HEIGHT, main.TILE_WIDTH, 3)
@@ -301,7 +301,7 @@ def test_read_display_frame_result_alert_update_is_none_when_camera_off() -> Non
     )
 
     result = main._read_display_frame(
-        camera_view, RiskLogger(), EventManager(), now=0.0
+        camera_view, RiskLogger(), AlertManager(), now=0.0
     )
 
     assert result.alert_update is None
@@ -315,7 +315,7 @@ def test_read_display_frame_result_alert_update_is_none_without_processor() -> N
     )
 
     result = main._read_display_frame(
-        camera_view, RiskLogger(), EventManager(), now=0.0
+        camera_view, RiskLogger(), AlertManager(), now=0.0
     )
 
     assert result.alert_update is None
@@ -326,14 +326,14 @@ def test_read_display_frame_result_alert_update_is_none_without_processor() -> N
 #
 # 실제 badge/border 렌더링 결과(픽셀)는 tests/test_alert_renderer.py에서
 # app.alerts.alert_renderer를 직접 검증한다. 여기서는 main._read_display_frame이
-# EventManager와 renderer를 "올바른 시점에 올바른 값으로" 연결하는지만 본다.
+# AlertManager와 renderer를 "올바른 시점에 올바른 값으로" 연결하는지만 본다.
 # ---------------------------------------------------------------------------
 
 
-def test_read_display_frame_passes_event_manager_result_to_renderer(
+def test_read_display_frame_passes_alert_manager_result_to_renderer(
     monkeypatch, tmp_path
 ) -> None:
-    """분석이 성공하면 EventManager.update() 결과가 그대로 renderer에 전달돼야 한다."""
+    """분석이 성공하면 AlertManager.update_camera() 결과가 그대로 renderer에 전달돼야 한다."""
     received_updates = []
     monkeypatch.setattr(
         main,
@@ -352,7 +352,7 @@ def test_read_display_frame_passes_event_manager_result_to_renderer(
         enabled=True,
     )
 
-    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), EventManager(), now=5.0)
+    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), AlertManager(), now=5.0)
 
     assert len(received_updates) == 1
     assert received_updates[0].camera_id == "cam_01"
@@ -371,7 +371,7 @@ def test_read_display_frame_does_not_call_renderer_when_camera_off(
         enabled=False,
     )
 
-    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), EventManager(), now=0.0)
+    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), AlertManager(), now=0.0)
 
     assert calls == []
 
@@ -388,7 +388,7 @@ def test_read_display_frame_does_not_call_renderer_when_no_processed_frame(
         enabled=True,
     )
 
-    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), EventManager(), now=0.0)
+    main._read_display_frame(camera_view, RiskLogger(log_dir=tmp_path), AlertManager(), now=0.0)
 
     assert calls == []
 
@@ -396,8 +396,8 @@ def test_read_display_frame_does_not_call_renderer_when_no_processed_frame(
 def test_read_display_frame_updates_independent_alert_state_per_camera(
     monkeypatch, tmp_path
 ) -> None:
-    """서로 다른 camera_id에 대한 호출은 EventManager에서 독립적인
-    CameraAlertUpdate를 받아와야 한다."""
+    """서로 다른 camera_id에 대한 호출은 AlertManager(내부 EventManager)에서
+    독립적인 CameraAlertUpdate를 받아와야 한다."""
     received_updates = {}
     monkeypatch.setattr(
         main,
@@ -407,7 +407,7 @@ def test_read_display_frame_updates_independent_alert_state_per_camera(
         ),
     )
 
-    event_manager = EventManager()
+    alert_manager = AlertManager()
     risk_logger = RiskLogger(log_dir=tmp_path)
 
     worker = WorkerZoneInfo(
@@ -453,10 +453,10 @@ def test_read_display_frame_updates_independent_alert_state_per_camera(
         )
 
     main._read_display_frame(
-        _view_with_risk("cam_01", RiskLevel.WARNING), risk_logger, event_manager, now=0.0
+        _view_with_risk("cam_01", RiskLevel.WARNING), risk_logger, alert_manager, now=0.0
     )
     main._read_display_frame(
-        _view_with_risk("cam_03", RiskLevel.CRITICAL), risk_logger, event_manager, now=0.0
+        _view_with_risk("cam_03", RiskLevel.CRITICAL), risk_logger, alert_manager, now=0.0
     )
 
     assert received_updates["cam_01"].current_level == RiskLevel.WARNING

@@ -9,10 +9,9 @@ import time
 import cv2
 import numpy as np
 
+from app.alerts.alert_manager import AlertManager
 from app.alerts.alert_renderer import draw_alert_overlay
-from app.alerts.event_manager import EventManager
 from app.alerts.models import CameraAlertUpdate
-from app.alerts.sound import LocalSoundPlayer
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
 from app.risk.risk_engine import RiskEngine
@@ -37,10 +36,10 @@ TILE_HEIGHT = 360
 MAX_VIEW_COUNT = 4
 DEFAULT_SAMPLE_DIR = PROJECT_ROOT / "data" / "samples" / "forklift_human_nearmiss"
 # cam_03(ceiling)/cam_04(eye)에 쓸 샘플 영상을 고정하고 싶을 때만 정수로 지정한다.
-# None이면 실행마다 무작위로 run/ceiling/eye가 선택된다. 값을 바꿔가며 실행해 터미널의
+# None이면 실행마다 무작위로 run/ceiling/eye가 선택된다. 아래의 None = 값을 바꿔가며 실행해 터미널의
 # "[sample video] cam_03: ..." 출력으로 원하는 파일이 나오는 seed를 찾으면 된다.
-# 현재 테스트 가능한 seed 번호: 4, 7, 
-SAMPLE_VIDEO_SEED: int | None = 14
+# 현재 테스트 가능한 seed 번호: 4, 7, 15 (15번 이후 미확인. 확인 필요.)
+SAMPLE_VIDEO_SEED: int | None = 15
 MODEL_CONFIG_PATH = PROJECT_ROOT / "config" / "model.yaml"
 SYSTEM_CONFIG_PATH = PROJECT_ROOT / "config" / "system.yaml"
 
@@ -91,7 +90,7 @@ class DisplayFrameResult:
     """_read_display_frame() 한 번의 결과: 화면에 쓸 frame과 Sound 판단용 Alert 결과.
 
     frame은 camera OFF/분석 불가 상태에서도 항상 채워진다(blank tile 또는 raw frame).
-    alert_update는 이번 cycle에 Risk 분석이 실제로 성공해 EventManager가 그 camera의
+    alert_update는 이번 cycle에 Risk 분석이 실제로 성공해 AlertManager가 그 camera의
     Alert 상태를 갱신한 경우에만 채워지고, 그 외에는 None이다. main loop는 이 None 여부로
     "Sound 판단에 포함할 camera"를 걸러낸다.
     """
@@ -118,15 +117,10 @@ def main() -> None:
     risk_logger = RiskLogger()
     _prepare_risk_logger(risk_logger)
 
-    # Alert UI: EventManager는 camera_id별 hold 상태를 들고 있는 stateful 객체라
-    # 프레임마다 새로 만들면 3초 hold가 매번 초기화돼버린다. 실행 중 단 하나만
-    # 만들어 계속 재사용한다.
-    event_manager = EventManager()
-
-    # Sound Alert: LocalSoundPlayer는 현재 재생 중인 process/RiskLevel을 들고 있는
-    # stateful 객체라 프레임마다 새로 만들면 재생 중인 소리를 추적할 수 없다.
-    # EventManager와 마찬가지로 실행 중 단 하나만 만들어 계속 재사용한다.
-    sound_player = LocalSoundPlayer()
+    # Alert: camera별 Alert 상태(hold/escalation/de-escalation)와 Sound 재생을
+    # AlertManager가 함께 관리한다. 내부에 시간 기반 상태를 들고 있으므로 실행 중
+    # 단 하나만 만들어 계속 재사용한다.
+    alert_manager = AlertManager()
 
     display_state = DisplayState(
         camera_views=[
@@ -151,19 +145,19 @@ def main() -> None:
             # blink를 계산하도록 루프당 한 번만 시각을 읽는다.
             now = time.monotonic()
             results = [
-                _read_display_frame(camera_view, risk_logger, event_manager, now)
+                _read_display_frame(camera_view, risk_logger, alert_manager, now)
                 for camera_view in display_state.camera_views
             ]
             frames = [result.frame for result in results]
 
-            # Sound Alert: 이번 cycle에서 분석이 성공한 camera들의 CameraAlertUpdate만
-            # 모아(개별 camera 처리 즉시가 아니라) 한 번만 Sound 판단을 수행한다.
+            # Alert: 이번 cycle에서 분석이 성공한 camera들의 CameraAlertUpdate만
+            # 모아(개별 camera 처리 즉시가 아니라) 한 번만 Sound 상태를 갱신한다.
             alert_updates = [
                 result.alert_update
                 for result in results
                 if result.alert_update is not None
             ]
-            _dispatch_sound_alert(alert_updates, sound_player, now)
+            alert_manager.update_sound(alert_updates=alert_updates, now=now)
 
             display_frame, button_bounds = _compose_2x2_grid(
                 frames=frames,
@@ -175,7 +169,7 @@ def main() -> None:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
-        sound_player.close()
+        alert_manager.close()
         for camera_view in display_state.camera_views:
             camera_view.video_source.close()
         cv2.destroyAllWindows()
@@ -345,12 +339,12 @@ def _create_video_sources(camera_configs: list[CameraConfig]) -> list[VideoSourc
 def _read_display_frame(
     camera_view: CameraViewState,
     risk_logger: RiskLogger,
-    event_manager: EventManager,
+    alert_manager: AlertManager,
     now: float,
 ) -> DisplayFrameResult:
     """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다.
 
-    alert_update는 이번 호출에서 Risk 분석이 실제로 성공해 EventManager가 그
+    alert_update는 이번 호출에서 Risk 분석이 실제로 성공해 AlertManager가 그
     camera의 Alert 상태를 갱신한 경우에만 채워진다(Sound 판단에서 이 camera를
     포함시키기 위함). camera OFF, 입력 실패, processor 없음 등 분석이 아예
     이뤄지지 않은 경우에는 항상 None이다.
@@ -394,7 +388,7 @@ def _read_display_frame(
         # Alert UI: 분석이 실제로 성공한 경우(이 분기)에만 camera의 Alert 상태를
         # 갱신하고 renderer에게 그리기를 맡긴다. camera OFF나 처리 실패 시에는 이
         # 분기에 들어오지 않으므로 Alert UI도 자연히 표시되지 않는다.
-        camera_alert_update = event_manager.update(
+        camera_alert_update = alert_manager.update_camera(
             camera_id=video_source.camera_id,
             risk_assessments=processed_frame.risk_assessments,
         )
@@ -422,20 +416,6 @@ def _read_display_frame(
     frame = _resize_tile(frame_packet.frame)
     frame = _draw_camera_label(frame=frame, label=video_source.camera_id)
     return DisplayFrameResult(frame=frame, alert_update=None)
-
-
-def _dispatch_sound_alert(
-    alert_updates: list[CameraAlertUpdate],
-    sound_player: LocalSoundPlayer,
-    now: float,
-) -> None:
-    """이번 display cycle에서 모은 CameraAlertUpdate 전체로 Sound 상태를 한 번 갱신한다.
-
-    "최초 진입/escalation만 즉시 반응", "위험 유지 시 3초마다 반복 알림" 같은 실제
-    판단은 LocalSoundPlayer.update()가 전담한다. 이 함수는 orchestration 계층에서
-    그 호출을 한 번만 하도록 묶어주는 역할만 한다.
-    """
-    sound_player.update(alert_updates, now)
 
 
 def _compose_2x2_grid(

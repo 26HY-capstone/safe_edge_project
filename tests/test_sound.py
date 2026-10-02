@@ -417,21 +417,7 @@ def test_close_without_playing_process_does_nothing(monkeypatch) -> None:
     player.close()  # 아무 process도 없을 때 호출해도 예외가 없어야 한다.
 
 
-# ---------------------------------------------------------------------------
-# Main integration: main._dispatch_sound_alert
-# ---------------------------------------------------------------------------
-
-
-def test_dispatch_sound_alert_forwards_updates_and_now_to_player() -> None:
-    from app import main
-
-    received = []
-
-    class _FakePlayer:
-        def update(self, alert_updates, now):
-            received.append((alert_updates, now))
-
-    updates = [_update(RiskLevel.WARNING)]
-    main._dispatch_sound_alert(updates, _FakePlayer(), now=7.0)
-
-    assert received == [(updates, 7.0)]
+# main.py의 Sound orchestration(_dispatch_sound_alert)은 app/alerts/alert_manager.py의
+# AlertManager로 이동했다. "alert_updates/now가 그대로 전달되는가"는 이제
+# tests/test_alert_manager.py::test_update_sound_calls_sound_player_update_exactly_once에서
+# 검증한다.
