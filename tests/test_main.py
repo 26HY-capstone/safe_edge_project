@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from app import main
+from app.alerts.event_manager import EventManager
 from app.inference.detector import Detector
 from app.risk.risk_engine import RiskEngine
 from app.risk.risk_logger import RiskLogger
@@ -282,7 +283,9 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
     )
 
     # risk_assessments가 비어 있어 RiskLogger.log()는 아무 파일도 쓰지 않는다.
-    display_frame = main._read_display_frame(camera_view, RiskLogger())
+    display_frame = main._read_display_frame(
+        camera_view, RiskLogger(), EventManager(), now=0.0
+    )
 
     assert display_frame.shape == (main.TILE_HEIGHT, main.TILE_WIDTH, 3)
     assert display_frame.mean() > 0

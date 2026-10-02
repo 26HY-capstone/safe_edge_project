@@ -27,9 +27,13 @@ class CameraAlertUpdate:
 
     UI/Sound 계층은 이 객체의 changed와 current_level만으로
     "지금 바로 반응해야 하는 변화인지"를 판단할 수 있다.
+    state_started_at은 UI가 camera별로 독립적인 blink phase를 계산할 때
+    쓴다 — EventManager 내부의 private 상태(_states)에 UI가 직접 접근하지
+    않아도 되도록, 필요한 시각 정보를 이 DTO에 그대로 담아 내보낸다.
     """
 
     camera_id: str
     previous_level: RiskLevel
     current_level: RiskLevel
     changed: bool
+    state_started_at: float

@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import time
 
 import cv2
 import numpy as np
 
+from app.alerts.event_manager import EventManager
+from app.alerts.models import CameraAlertUpdate
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
+from app.risk.models import RiskLevel
 from app.risk.risk_engine import RiskEngine
 from app.risk.risk_logger import RiskLogger
 from app.tracking.tracker import Tracker, create_tracker_from_system_config
@@ -37,6 +41,15 @@ SYSTEM_CONFIG_PATH = PROJECT_ROOT / "config" / "system.yaml"
 # 화면 슬롯 0~3에 대응하는 고정 camera_id 목록 ("cam_01".."cam_04").
 # 실제 video_sources 개수가 4보다 적어도 Risk Log 파일은 이 네 개로 항상 유지한다.
 DISPLAY_CAMERA_IDS = [f"cam_{slot_index + 1:02d}" for slot_index in range(MAX_VIEW_COUNT)]
+
+# Alert UI 상수. 실제 실행 후 조정할 수 있으므로 하드코딩을 흩어놓지 않고 한 곳에서 관리한다.
+BLINK_INTERVAL_SECONDS = 0.5
+ALERT_BORDER_THICKNESS = 8
+ALERT_BORDER_COLOR_WARNING = (0, 255, 255)  # BGR: Yellow
+ALERT_BORDER_COLOR_CRITICAL = (0, 0, 255)  # BGR: Red
+ALERT_BADGE_WIDTH = 120
+ALERT_BADGE_HEIGHT = 34
+ALERT_BADGE_MARGIN = 16
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +101,11 @@ def main() -> None:
     risk_logger = RiskLogger()
     _prepare_risk_logger(risk_logger)
 
+    # Alert UI: EventManager는 camera_id별 hold 상태를 들고 있는 stateful 객체라
+    # 프레임마다 새로 만들면 3초 hold가 매번 초기화돼버린다. 실행 중 단 하나만
+    # 만들어 계속 재사용한다.
+    event_manager = EventManager()
+
     display_state = DisplayState(
         camera_views=[
             CameraViewState(
@@ -107,8 +125,11 @@ def main() -> None:
         cv2.setMouseCallback(WINDOW_NAME, _handle_mouse_event, display_state)
 
         while True:
+            # 한 번의 2x2 화면 갱신에서는 모든 camera가 같은 now를 기준으로
+            # blink를 계산하도록 루프당 한 번만 시각을 읽는다.
+            now = time.monotonic()
             frames = [
-                _read_display_frame(camera_view, risk_logger)
+                _read_display_frame(camera_view, risk_logger, event_manager, now)
                 for camera_view in display_state.camera_views
             ]
             display_frame, button_bounds = _compose_2x2_grid(
@@ -289,6 +310,8 @@ def _create_video_sources(camera_configs: list[CameraConfig]) -> list[VideoSourc
 def _read_display_frame(
     camera_view: CameraViewState,
     risk_logger: RiskLogger,
+    event_manager: EventManager,
+    now: float,
 ) -> np.ndarray:
     """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다."""
     video_source = camera_view.video_source
@@ -316,8 +339,22 @@ def _read_display_frame(
             frame = processed_frame.frame_packet.frame
 
         frame = _resize_tile(frame)
-        return _draw_camera_label(frame=frame, label=video_source.camera_id)
+        frame = _draw_camera_label(frame=frame, label=video_source.camera_id)
 
+        # Alert UI: 분석이 실제로 성공한 경우(이 분기)에만 camera의 Alert 상태를
+        # 갱신하고 badge/border를 덧그린다. camera OFF나 처리 실패 시에는 이
+        # 분기에 들어오지 않으므로 Alert UI도 자연히 표시되지 않는다.
+        camera_alert_update = event_manager.update(
+            camera_id=video_source.camera_id,
+            risk_assessments=processed_frame.risk_assessments,
+        )
+        _draw_alert_overlay(frame=frame, camera_alert_update=camera_alert_update, now=now)
+
+        return frame
+
+    # processor가 없는 입력(detector 비활성 등)은 Risk 분석 결과 자체가 없으므로
+    # Alert badge/border를 그리지 않는다. NORMAL로 대체 표시하지 않는 것이 중요하다
+    # (NORMAL은 "분석 결과가 정상"이라는 뜻이고, 여기는 분석이 아예 안 되는 상태다).
     try:
         frame_packet = video_source.read()
     except (FileNotFoundError, VideoSourceError):
@@ -425,6 +462,97 @@ def _draw_power_button(
         x2=offset_x + x2,
         y2=offset_y + y2,
     )
+
+
+def _draw_alert_overlay(
+    frame: np.ndarray,
+    camera_alert_update: CameraAlertUpdate,
+    now: float,
+) -> None:
+    """Alert badge와 border를 함께 그린다.
+
+    badge는 NORMAL/WARNING/CRITICAL 모든 상태에서 그리고(크기 고정),
+    border는 WARNING/CRITICAL일 때만, 그리고 blink가 켜진 순간에만 그린다.
+    실제 책임(상태 판단/배지/테두리/blink 여부)은 아래 각 helper로 분리해
+    이 함수는 호출 순서만 조립한다.
+    """
+    _draw_alert_badge(frame=frame, risk_level=camera_alert_update.current_level)
+
+    if camera_alert_update.current_level == RiskLevel.NORMAL:
+        return
+
+    border_color = (
+        ALERT_BORDER_COLOR_CRITICAL
+        if camera_alert_update.current_level == RiskLevel.CRITICAL
+        else ALERT_BORDER_COLOR_WARNING
+    )
+    if _is_alert_border_visible(
+        state_started_at=camera_alert_update.state_started_at,
+        now=now,
+    ):
+        _draw_alert_border(frame=frame, color=border_color)
+
+
+def _draw_alert_badge(frame: np.ndarray, risk_level: RiskLevel) -> None:
+    """tile 우하단에 흰색 badge를 그린다. WARNING/CRITICAL이면 등급 글자를 넣는다.
+
+    badge 좌표는 risk_level과 무관하게 항상 같은 상수(ALERT_BADGE_WIDTH/HEIGHT)로
+    계산하므로, 상태가 바뀌어도 badge 크기와 위치가 흔들리지 않는다.
+    """
+    x2 = TILE_WIDTH - ALERT_BADGE_MARGIN
+    x1 = x2 - ALERT_BADGE_WIDTH
+    y2 = TILE_HEIGHT - ALERT_BADGE_MARGIN
+    y1 = y2 - ALERT_BADGE_HEIGHT
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), -1)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), 1)
+
+    if risk_level == RiskLevel.NORMAL:
+        # NORMAL은 글자 없는 빈 badge로 둔다.
+        return
+
+    cv2.putText(
+        frame,
+        risk_level.name,
+        (x1 + 11, y2 - 11),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 0, 0),
+        2,
+    )
+
+
+def _draw_alert_border(frame: np.ndarray, color: tuple[int, int, int]) -> None:
+    """tile 전체 외곽에 Alert border를 그린다.
+
+    cv2.rectangle의 선은 지정한 경계선 위에 두께만큼 양쪽으로 걸쳐 그려진다.
+    경계선을 이미지 가장자리(0, width-1 등)에 그대로 두면 바깥쪽으로 나가는
+    절반이 이미지 밖이라 잘려서, 실제로는 thickness의 절반 정도만 보이게 된다.
+    경계선을 thickness의 절반만큼 안쪽으로 들여 그려서, 선 전체가 이미지 안에
+    들어와 지정한 두께가 그대로 보이게 한다.
+    """
+    height, width = frame.shape[:2]
+    inset = ALERT_BORDER_THICKNESS // 2
+    cv2.rectangle(
+        frame,
+        (inset, inset),
+        (width - 1 - inset, height - 1 - inset),
+        color,
+        ALERT_BORDER_THICKNESS,
+    )
+
+
+def _is_alert_border_visible(state_started_at: float, now: float) -> bool:
+    """Alert 상태가 시작된 시각(state_started_at) 기준으로 지금 border를 켤지 끌지 정한다.
+
+    camera마다 state_started_at이 다르므로, 같은 now를 받아도 카메라별로
+    독립적인 blink phase가 나온다. frame_index/FPS가 아니라 경과한 실제
+    시간(now - state_started_at)만으로 계산하므로 재생 속도나 frame drop과
+    무관하게 항상 같은 주기로 깜빡인다.
+    """
+    elapsed = max(0.0, now - state_started_at)
+    phase = int(elapsed / BLINK_INTERVAL_SECONDS)
+    return phase % 2 == 0
 
 
 if __name__ == "__main__":

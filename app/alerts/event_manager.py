@@ -100,6 +100,7 @@ class EventManager:
             previous_level=previous_level,
             current_level=state.risk_level,
             changed=changed,
+            state_started_at=state.state_started_at,
         )
 
 

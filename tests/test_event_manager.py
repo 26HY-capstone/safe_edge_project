@@ -80,6 +80,46 @@ def test_get_highest_risk_level_picks_highest_among_many_combinations() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CameraAlertUpdate.state_started_at (UI blink 계산에 사용)
+# ---------------------------------------------------------------------------
+
+
+def test_camera_alert_update_reports_current_state_started_at() -> None:
+    """CameraAlertUpdate에 state_started_at이 담기고, EventManager는 UI가
+    내부 _states에 접근하지 않아도 현재 상태의 시작 시각을 알 수 있게 해야 한다."""
+    clock = _FakeClock(start=10.0)
+    manager = EventManager(clock=clock)
+
+    update = manager.update("cam_01", [_assessment(RiskLevel.WARNING)])
+
+    assert update.state_started_at == 10.0
+
+
+def test_event_manager_escalation_updates_state_started_at() -> None:
+    """escalation이 발생하면 state_started_at이 escalation 시점으로 갱신돼야 한다."""
+    clock = _FakeClock(start=0.0)
+    manager = EventManager(clock=clock)
+    manager.update("cam_01", [_assessment(RiskLevel.WARNING)])  # t=0
+
+    clock.advance(1.2)
+    update = manager.update("cam_01", [_assessment(RiskLevel.CRITICAL)])  # t=1.2
+
+    assert update.state_started_at == 1.2
+
+
+def test_event_manager_sustained_level_keeps_state_started_at() -> None:
+    """동일 RiskLevel이 계속 관측되면 state_started_at이 바뀌지 않아야 한다."""
+    clock = _FakeClock(start=0.0)
+    manager = EventManager(clock=clock)
+    manager.update("cam_01", [_assessment(RiskLevel.WARNING)])  # t=0, 시작 시각=0
+
+    clock.advance(1.5)
+    update = manager.update("cam_01", [_assessment(RiskLevel.WARNING)])  # 지속
+
+    assert update.state_started_at == 0.0
+
+
+# ---------------------------------------------------------------------------
 # EventManager 기본 동작
 # ---------------------------------------------------------------------------
 
