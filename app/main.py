@@ -10,9 +10,11 @@ import numpy as np
 
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
+from app.risk.risk_engine import RiskEngine
 from app.tracking.tracker import Tracker, create_tracker_from_system_config
 from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.frame_processor import FrameProcessor
+from app.zones.zone_manager import ZoneManager
 from app.video.sample_dataset import create_random_ceiling_eye_video_sources
 from app.video.video_source import (
     CameraConfig,
@@ -39,6 +41,8 @@ class ProcessingComponents:
     detector: Detector | None
     trackers: dict[str, Tracker]
     trajectory_analyzers: dict[str, TrajectoryAnalyzer]
+    zone_manager: ZoneManager
+    risk_engine: RiskEngine
 
 
 @dataclass(slots=True)
@@ -146,7 +150,7 @@ def _toggle_camera_view(
 def _create_processing_components(
     video_sources: list[VideoSource],
 ) -> ProcessingComponents:
-    """입력별 tracking 상태와 trajectory analyzer를 생성한다."""
+    """입력별 tracking 상태와 trajectory analyzer, 공용 Zone/Risk 컴포넌트를 생성한다."""
     detector = _create_detector()
     trackers = {
         video_source.camera_id: _create_tracker()
@@ -160,6 +164,11 @@ def _create_processing_components(
         detector=detector,
         trackers=trackers,
         trajectory_analyzers=trajectory_analyzers,
+        # ZoneManager와 RiskEngine은 프레임 단위 순수 계산만 수행하고 내부 상태를
+        # 유지하지 않으므로, tracker/trajectory_analyzer와 달리 카메라별로 나누지 않고
+        # 모든 FrameProcessor가 공유하는 인스턴스 하나만 둔다.
+        zone_manager=ZoneManager(),
+        risk_engine=RiskEngine(),
     )
 
 
@@ -197,6 +206,8 @@ def _create_frame_processor(
         detector=processing_components.detector,
         tracker=tracker,
         trajectory_analyzer=trajectory_analyzer,
+        zone_manager=processing_components.zone_manager,
+        risk_engine=processing_components.risk_engine,
         draw_bbox=True,
         draw_metrics=True,
     )

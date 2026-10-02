@@ -6,9 +6,11 @@ import numpy as np
 
 from app import main
 from app.inference.detector import Detector
+from app.risk.risk_engine import RiskEngine
 from app.tracking.tracker import SimpleTracker
 from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.video_source import CameraConfig, FramePacket, VideoSource
+from app.zones.zone_manager import ZoneManager
 
 
 class _FakeDetector(Detector):
@@ -125,6 +127,8 @@ def test_create_processing_components_uses_per_source_state(monkeypatch) -> None
         components.trajectory_analyzers["camera-0"]
         is not components.trajectory_analyzers["camera-1"]
     )
+    assert isinstance(components.zone_manager, ZoneManager)
+    assert isinstance(components.risk_engine, RiskEngine)
 
 
 def test_create_frame_processor_returns_none_without_detector() -> None:
@@ -133,6 +137,8 @@ def test_create_frame_processor_returns_none_without_detector() -> None:
         detector=None,
         trackers={},
         trajectory_analyzers={},
+        zone_manager=ZoneManager(),
+        risk_engine=RiskEngine(),
     )
 
     processor = main._create_frame_processor(
@@ -147,10 +153,14 @@ def test_create_frame_processor_uses_matching_source_state() -> None:
     video_source = VideoSource(source=0, camera_id="camera-0")
     tracker = SimpleTracker()
     trajectory_analyzer = TrajectoryAnalyzer()
+    zone_manager = ZoneManager()
+    risk_engine = RiskEngine()
     components = main.ProcessingComponents(
         detector=_FakeDetector(),
         trackers={"camera-0": tracker},
         trajectory_analyzers={"camera-0": trajectory_analyzer},
+        zone_manager=zone_manager,
+        risk_engine=risk_engine,
     )
 
     processor = main._create_frame_processor(
@@ -163,6 +173,8 @@ def test_create_frame_processor_uses_matching_source_state() -> None:
     assert processor.detector is components.detector
     assert processor.tracker is tracker
     assert processor.trajectory_analyzer is trajectory_analyzer
+    assert processor.zone_manager is zone_manager
+    assert processor.risk_engine is risk_engine
 
 
 def test_toggle_camera_view_closes_source_when_disabled(monkeypatch) -> None:
