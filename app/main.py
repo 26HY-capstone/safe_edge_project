@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from app.inference.detector import Detector
-from app.inference.pytorch_backend import create_pytorch_detector_from_model_config
+from app.inference.model_manager import create_detector_from_model_config
 from app.tracking.tracker import Tracker, create_tracker_from_system_config
 from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.frame_processor import FrameProcessor
@@ -166,7 +166,7 @@ def _create_processing_components(
 def _create_detector() -> Detector | None:
     """model.yaml 기반 detector를 생성하고 실패 시 화면 출력만 계속 가능하게 한다."""
     try:
-        return create_pytorch_detector_from_model_config(MODEL_CONFIG_PATH)
+        return create_detector_from_model_config(MODEL_CONFIG_PATH)
     except Exception as exc:
         logger.warning("Detector is disabled: %s", exc)
         return None
