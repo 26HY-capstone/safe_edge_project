@@ -4,11 +4,10 @@ EventManager가 만든 CameraAlertUpdate들을 보고 Sound를 "언제" 재생�
 순수 함수들과, 실제로 macOS afplay로 wav를 non-blocking 재생/중단하는
 LocalSoundPlayer로 구성된다.
 
-세 가지 "3초"를 절대 혼동하지 않는다:
   1) EventManager의 ALERT_HOLD_SECONDS: camera Alert 상태(UI에 쓰이는 current_level)를
-     최소 유지하는 시간. app/alerts/event_manager.py의 책임이며 여기서 다시 구현하지 않는다.
+     최소 유지하는 시간. app/alerts/event_manager.py의 책임.
   2) SOUND_REEVALUATION_SECONDS(이 모듈): 위험이 계속 유지되고 있을 때 Sound를
-     "반복 알림"하는 주기. 값은 우연히 같은 3.0초지만 책임은 완전히 분리되어 있다.
+     "반복 알림"하는 주기. 값은 같은 3.0초지만 책임은 분리되어 있다.
   3) 실제 wav 파일의 playback 재생 시간: warning.wav/critical.wav 자체의 길이.
      3초보다 짧게 끝나도(자연 종료) Sound Alert cycle 자체는 끝난 것으로 보지 않는다
      (LocalSoundPlayer._cycle_started_at/​_current_alert_level이 playback process와
@@ -48,7 +47,7 @@ logger = logging.getLogger(__name__)
 def get_current_highest_alert_level(
     alert_updates: list[CameraAlertUpdate],
 ) -> RiskLevel:
-    """이번 display cycle에서 모은 camera들의 "현재" Alert Level 중 최고를 계산한다(순수 함수).
+    """이번 display cycle에서 모은 camera들의 "현재" Alert Level 중 최고를 계산한다.
 
     changed 여부와 무관하게 current_level만 본다 — 3초 재평가는 "새 이벤트가
     있었는가"가 아니라 "지금 이 순간 위험이 여전히 존재하는가"를 물어야 하기 때문이다.
@@ -69,7 +68,7 @@ def get_new_sound_event_level(
     current_highest_level: RiskLevel,
     current_sound_level: RiskLevel | None,
 ) -> RiskLevel | None:
-    """즉시 반응해야 하는 "신규" Sound 이벤트 레벨을 판단한다(순수 함수).
+    """즉시 반응해야 하는 "신규" Sound 이벤트 레벨을 판단한다.
 
     즉시 반응 대상은 다음 두 가지뿐이다:
       - 현재 재생 중인 Sound Alert cycle이 없는데(current_sound_level=None) 위험이

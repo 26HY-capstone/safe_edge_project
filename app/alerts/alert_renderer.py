@@ -29,7 +29,7 @@ def draw_alert_overlay(
 ) -> None:
     """Alert badge와 border를 frame에 함께 그린다.
 
-    badge는 NORMAL/WARNING/CRITICAL 모든 상태에서 그리고(크기는 항상 고정),
+    badge는 NORMAL/WARNING/CRITICAL 모든 상태에서 그리고,
     border는 WARNING/CRITICAL이면서 blink가 켜진 순간에만 그린다.
     """
     _draw_alert_badge(frame=frame, risk_level=camera_alert_update.current_level)
@@ -80,13 +80,7 @@ def _draw_alert_badge(frame: np.ndarray, risk_level: RiskLevel) -> None:
 
 
 def _draw_alert_border(frame: np.ndarray, color: tuple[int, int, int]) -> None:
-    """frame 전체 외곽에 Alert border를 그린다.
-
-    cv2.rectangle은 경계선 위에 두께만큼 양쪽으로 걸쳐 그리는데, 경계선을
-    이미지 가장자리에 그대로 두면 바깥쪽 절반이 이미지 밖으로 잘려 실제로는
-    두께가 반밖에 안 보인다. 경계선을 두께의 절반만큼 안쪽으로 들여 그려서
-    지정한 두께가 그대로 보이게 한다.
-    """
+    """frame 전체 외곽에 Alert border를 그린다."""
     height, width = frame.shape[:2]
     inset = ALERT_BORDER_THICKNESS // 2
     cv2.rectangle(

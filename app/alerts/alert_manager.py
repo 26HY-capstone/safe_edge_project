@@ -1,7 +1,6 @@
 """Alert 기능(EventManager + LocalSoundPlayer)의 orchestration을 담당하는 모듈.
 
-main.py는 camera별 Alert 상태 판단과 Sound 재생의 세부 구현을 알 필요가 없다.
-AlertManager는 이 두 stateful 컴포넌트를 소유하고, display 계층이 쓰기 편한
+AlertManager는 alert와 sound 두 stateful 컴포넌트를 소유하고, display 계층이 쓰기 편한
 수준의 좁은 API만 노출한다. Alert 판정 로직(hold/escalation/de-escalation)이나
 Sound 재생 로직(afplay, 3초 재평가 cycle)은 이 클래스에 복제하지 않고 각 모듈
 (event_manager.py, sound.py)에 그대로 위임한다.
@@ -19,8 +18,7 @@ class AlertManager:
     """camera Alert 상태(EventManager)와 Sound 재생(LocalSoundPlayer)을 함께 관리한다.
 
     두 컴포넌트 모두 내부에 시간 기반 state(hold 시각, sound cycle 시각)를 들고
-    있으므로, main.py가 실행 중 단 하나의 AlertManager만 만들어 계속 재사용해야
-    한다(camera_id별 독립 상태와 sound cycle이 매 프레임 초기화되지 않도록).
+    있으므로, main.py가 실행 중 단 하나의 AlertManager만 만들어 계속 재사용 해야한다.
     """
 
     def __init__(
@@ -59,9 +57,5 @@ class AlertManager:
         self._sound_player.update(alert_updates, now)
 
     def close(self) -> None:
-        """프로그램 종료 시 Alert 관련 리소스를 정리한다.
-
-        현재는 재생 중인 Sound playback 정리가 전부이지만, 앞으로 Alert 관련
-        리소스가 늘어나도 main.py는 이 close() 하나만 호출하면 되도록 한다.
-        """
+        """프로그램 종료 시 Alert 관련 리소스를 정리한다."""
         self._sound_player.close()
