@@ -11,6 +11,7 @@ import numpy as np
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
 from app.risk.risk_engine import RiskEngine
+from app.risk.risk_logger import RiskLogger
 from app.tracking.tracker import Tracker, create_tracker_from_system_config
 from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.frame_processor import FrameProcessor
@@ -32,6 +33,10 @@ MAX_VIEW_COUNT = 4
 DEFAULT_SAMPLE_DIR = PROJECT_ROOT / "data" / "samples" / "forklift_human_nearmiss"
 MODEL_CONFIG_PATH = PROJECT_ROOT / "config" / "model.yaml"
 SYSTEM_CONFIG_PATH = PROJECT_ROOT / "config" / "system.yaml"
+
+# 화면 슬롯 0~3에 대응하는 고정 camera_id 목록 ("cam_01".."cam_04").
+# 실제 video_sources 개수가 4보다 적어도 Risk Log 파일은 이 네 개로 항상 유지한다.
+DISPLAY_CAMERA_IDS = [f"cam_{slot_index + 1:02d}" for slot_index in range(MAX_VIEW_COUNT)]
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +80,14 @@ def main() -> None:
     """설정된 영상 입력을 최대 4개까지 한 창의 2x2 화면으로 표시한다."""
     camera_configs = load_camera_configs()
     video_sources = _create_display_video_sources(camera_configs)
+    _assign_display_camera_ids(video_sources)
     processing_components = _create_processing_components(video_sources)
+
+    # Risk Log: 화면 슬롯 4개에 대응하는 로그 파일을 시작 시 한 번만 초기화한다.
+    # 프레임 처리 중에는 이 인스턴스 하나의 log()만 호출되고 다시 초기화하지 않는다.
+    risk_logger = RiskLogger()
+    _prepare_risk_logger(risk_logger)
+
     display_state = DisplayState(
         camera_views=[
             CameraViewState(
@@ -96,7 +108,7 @@ def main() -> None:
 
         while True:
             frames = [
-                _read_display_frame(camera_view)
+                _read_display_frame(camera_view, risk_logger)
                 for camera_view in display_state.camera_views
             ]
             display_frame, button_bounds = _compose_2x2_grid(
@@ -223,6 +235,29 @@ def _create_display_video_sources(
     return [*camera_sources, *sample_sources][:MAX_VIEW_COUNT]
 
 
+def _prepare_risk_logger(risk_logger: RiskLogger) -> None:
+    """화면 슬롯 4개(DISPLAY_CAMERA_IDS)에 대응하는 로그 파일을 항상 준비한다.
+
+    실제 video_sources 개수와 무관하게 risk_log_cam_01~04.jsonl 네 개를 고정으로
+    초기화한다. 이번 실행에서 입력이 없는 슬롯의 로그 파일은 빈 파일로 유지된다.
+    """
+    risk_logger.prepare(DISPLAY_CAMERA_IDS)
+
+
+def _assign_display_camera_ids(video_sources: list[VideoSource]) -> None:
+    """화면 슬롯 순서를 기준으로 camera_id를 cam_01~04로 고정한다.
+
+    샘플 ceiling/eye 영상은 실행마다 무작위로 다른 run_id가 선택되어
+    (app/video/sample_dataset.py) camera_id도 매번 달라진다. 이 상태로 두면
+    RiskLogger가 실행마다 새 로그 파일을 계속 만들게 된다. 실제 영상 내용과
+    무관하게 화면에 표시되는 슬롯 순서(0번=laptop-camera, 1번=factory-floor-demo,
+    2~3번=샘플 ceiling/eye)를 기준으로 camera_id를 덮어써서, 로그 파일이 항상
+    cam_01~04 네 개로만 유지되게 한다.
+    """
+    for slot_index, video_source in enumerate(video_sources):
+        video_source.camera_id = f"cam_{slot_index + 1:02d}"
+
+
 def _create_sample_video_sources() -> list[VideoSource]:
     """샘플 metadata에서 ceiling/eye 영상 쌍을 생성한다."""
     if not DEFAULT_SAMPLE_DIR.is_dir():
@@ -251,7 +286,10 @@ def _create_video_sources(camera_configs: list[CameraConfig]) -> list[VideoSourc
     return video_sources
 
 
-def _read_display_frame(camera_view: CameraViewState) -> np.ndarray:
+def _read_display_frame(
+    camera_view: CameraViewState,
+    risk_logger: RiskLogger,
+) -> np.ndarray:
     """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다."""
     video_source = camera_view.video_source
     if not camera_view.enabled:
@@ -265,6 +303,13 @@ def _read_display_frame(camera_view: CameraViewState) -> np.ndarray:
 
         if processed_frame is None:
             return _make_blank_tile(f"{video_source.camera_id}: no frame")
+
+        # Risk Log: Zone/Risk 계산 결과를 프레임마다 JSONL로 남긴다(디버깅/검증용).
+        # FrameProcessor 내부에서는 파일 I/O를 하지 않고, 호출부인 여기서 기록한다.
+        risk_logger.log(
+            zone_result=processed_frame.zone_result,
+            risk_assessments=processed_frame.risk_assessments,
+        )
 
         frame = processed_frame.rendered_frame
         if frame is None:
