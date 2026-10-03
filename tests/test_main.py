@@ -1,17 +1,28 @@
 """main 실행 입력 구성 로직을 검증하는 테스트."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import numpy as np
 
 from app import main
+from app.alerts.alert_manager import AlertManager
+from app.alerts.event_manager import EventManager
 from app.inference.detector import Detector
 from app.risk.risk_engine import RiskEngine
 from app.risk.risk_logger import RiskLogger
+from app.risk.models import RiskAssessment, RiskLevel
+from app.storage.database import Database
+from app.storage.event_repository import EventRepository
 from app.tracking.tracker import SimpleTracker
 from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.video_source import CameraConfig, FramePacket, VideoSource
-from app.zones.models import ZoneFrameResult
+from app.zones.models import (
+    EquipmentType,
+    EquipmentZoneInfo,
+    WorkerZoneInfo,
+    ZoneFrameResult,
+)
 from app.zones.zone_manager import ZoneManager
 
 
@@ -286,3 +297,72 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
 
     assert display_frame.shape == (main.TILE_HEIGHT, main.TILE_WIDTH, 3)
     assert display_frame.mean() > 0
+
+
+def test_read_display_frame_persists_created_event(tmp_path) -> None:
+    zone_result = ZoneFrameResult(
+        timestamp=10.0,
+        frame_index=100,
+        camera_id="camera-0",
+        workers=[
+            WorkerZoneInfo(
+                person_id=11,
+                person_bbox=(100.0, 100.0, 140.0, 300.0),
+                bottom_center=(120.0, 300.0),
+            )
+        ],
+        equipments=[
+            EquipmentZoneInfo(
+                equipment_id=22,
+                equipment_type=EquipmentType.FORKLIFT,
+                equipment_bbox=(200.0, 180.0, 400.0, 360.0),
+                warning_zone=(160.0, 140.0, 440.0, 400.0),
+                critical_zone=(200.0, 180.0, 400.0, 360.0),
+                is_active=True,
+            )
+        ],
+    )
+    assessment = RiskAssessment(
+        timestamp=10.0,
+        frame_index=100,
+        camera_id="camera-0",
+        person_id=11,
+        equipment_id=22,
+        equipment_type=EquipmentType.FORKLIFT,
+        risk_level=RiskLevel.WARNING,
+    )
+    camera_view = main.CameraViewState(
+        video_source=VideoSource(source=0, camera_id="camera-0"),
+        processor=_FakeProcessor(
+            _FakeProcessedFrame(
+                frame_packet=_frame_packet(),
+                rendered_frame=np.zeros((100, 100, 3), dtype=np.uint8),
+                zone_result=zone_result,
+                risk_assessments=[assessment],
+            )
+        ),
+        enabled=True,
+    )
+    database = Database(tmp_path / "events.db")
+    database.initialize()
+    repository = EventRepository(database)
+    event_components = main.EventComponents(
+        event_manager=EventManager(
+            clock=lambda: datetime(2026, 10, 3, tzinfo=timezone.utc)
+        ),
+        alert_manager=AlertManager(),
+        event_repository=repository,
+        database=database,
+    )
+
+    main._read_display_frame(
+        camera_view,
+        event_components=event_components,
+    )
+    records = repository.list_events()
+    database.dispose()
+
+    assert len(records) == 1
+    assert records[0].camera_id == "camera-0"
+    assert records[0].person_track_id == 11
+    assert records[0].equipment_track_id == 22
