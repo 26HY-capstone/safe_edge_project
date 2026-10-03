@@ -3,7 +3,8 @@ opencv-python>=4.9,<5
 PyYAML>=6.0,<7
 
 ultralytics>=8.3,<9
-onnxruntime>=1.18,<2
+# Windows NVIDIA GPU용 ONNX Runtime. CPU provider도 함께 포함한다.
+onnxruntime-gpu>=1.18,<2
 lap>=0.5.12,<1
 
 fastapi>=0.115,<1

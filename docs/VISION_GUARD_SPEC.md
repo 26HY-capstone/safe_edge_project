@@ -121,6 +121,12 @@ PyTorch `.pt` 모델과 TensorRT `.engine` 모델을 동일 인터페이스에�
 - Local/Server: PyTorch
 - Jetson: TensorRT
 
+개발 장비별 ONNX 실행 브랜치는 동일한 `Detector` 계약을 유지한다.
+
+- `feature/windows-gpu`: CUDA Execution Provider의 첫 번째 NVIDIA GPU를 우선 사용하고 CPU fallback을 허용한다.
+- Windows 경고음은 운영체제 내장 `winsound`로 비동기 재생한다.
+- 실제 활성 provider는 애플리케이션 시작 로그에서 확인하고 CPU 실행 결과와 FPS 및 latency를 비교한다.
+
 ## 6. PPE 탐지
 
 작업자의 PPE 착용 여부를 판단한다.

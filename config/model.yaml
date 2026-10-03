@@ -5,7 +5,9 @@ detector:
   # backend는 pytorch, onnx, tensorrt 중 실행 환경에 맞게 선택한다.
   backend: onnx
   model_path: models/model.onnx
-  device: cpu
+  # Windows NVIDIA GPU의 CUDA EP를 우선 사용한다. :0은 첫 번째 GPU다.
+  device: cuda:0
+  allow_cpu_fallback: true
   input_size: 640
   confidence_threshold: 0.25
   iou_threshold: 0.45

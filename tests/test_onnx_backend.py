@@ -2,7 +2,11 @@
 
 import pytest
 
-from app.inference.onnx_backend import _providers_for_device
+from app.inference.onnx_backend import (
+    _providers_for_device,
+    load_onnx_detector_config,
+)
+from app.video.video_source import PROJECT_ROOT
 
 
 def test_cpu_device_uses_cpu_provider() -> None:
@@ -81,3 +85,10 @@ def test_invalid_cuda_device_id_is_rejected() -> None:
                 "CPUExecutionProvider",
             ],
         )
+
+
+def test_branch_model_config_prefers_first_cuda_gpu_with_cpu_fallback() -> None:
+    config = load_onnx_detector_config(PROJECT_ROOT / "config" / "model.yaml")
+
+    assert config.device == "cuda:0"
+    assert config.allow_cpu_fallback is True
