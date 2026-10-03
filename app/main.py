@@ -7,11 +7,20 @@ import logging
 
 import cv2
 import numpy as np
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.alerts.alert_manager import AlertManager
+from app.alerts.event_manager import (
+    EventManager,
+    create_event_manager_from_system_config,
+)
+from app.alerts.models import EventTransition, EventTransitionType
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
 from app.risk.risk_engine import RiskEngine
-from app.risk.risk_logger import RiskLogger
+from app.risk.risk_logger import RiskLogger, is_frame_risk_log_enabled
+from app.storage.database import Database, create_database_from_system_config
+from app.storage.event_repository import EventRepository
 from app.tracking.tracker import Tracker, create_tracker_from_system_config
 from app.tracking.trajectory import TrajectoryAnalyzer
 from app.video.frame_processor import FrameProcessor
@@ -51,6 +60,14 @@ class ProcessingComponents:
 
 
 @dataclass(slots=True)
+class EventComponents:
+    event_manager: EventManager
+    alert_manager: AlertManager
+    event_repository: EventRepository | None
+    database: Database | None
+
+
+@dataclass(slots=True)
 class CameraViewState:
     video_source: VideoSource
     processor: FrameProcessor | None = None
@@ -82,11 +99,8 @@ def main() -> None:
     video_sources = _create_display_video_sources(camera_configs)
     _assign_display_camera_ids(video_sources)
     processing_components = _create_processing_components(video_sources)
-
-    # Risk Log: 화면 슬롯 4개에 대응하는 로그 파일을 시작 시 한 번만 초기화한다.
-    # 프레임 처리 중에는 이 인스턴스 하나의 log()만 호출되고 다시 초기화하지 않는다.
-    risk_logger = RiskLogger()
-    _prepare_risk_logger(risk_logger)
+    event_components = _create_event_components()
+    risk_logger = _create_frame_risk_logger()
 
     display_state = DisplayState(
         camera_views=[
@@ -108,7 +122,11 @@ def main() -> None:
 
         while True:
             frames = [
-                _read_display_frame(camera_view, risk_logger)
+                _read_display_frame(
+                    camera_view,
+                    risk_logger=risk_logger,
+                    event_components=event_components,
+                )
                 for camera_view in display_state.camera_views
             ]
             display_frame, button_bounds = _compose_2x2_grid(
@@ -121,6 +139,12 @@ def main() -> None:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
+        _handle_event_transitions(
+            event_components,
+            event_components.event_manager.resolve_all(),
+        )
+        if event_components.database is not None:
+            event_components.database.dispose()
         for camera_view in display_state.camera_views:
             camera_view.video_source.close()
         cv2.destroyAllWindows()
@@ -198,6 +222,34 @@ def _create_tracker() -> Tracker:
     return create_tracker_from_system_config(SYSTEM_CONFIG_PATH)
 
 
+def _create_event_components() -> EventComponents:
+    """이벤트 상태·로그를 만들고, 가능한 경우 SQLite 저장소를 연결한다."""
+    try:
+        event_manager = create_event_manager_from_system_config(SYSTEM_CONFIG_PATH)
+    except (OSError, ValueError) as exc:
+        logger.warning("Event policy uses defaults: %s", exc)
+        event_manager = EventManager()
+
+    database: Database | None = None
+    event_repository: EventRepository | None = None
+    try:
+        database = create_database_from_system_config(SYSTEM_CONFIG_PATH)
+        database.initialize()
+        event_repository = EventRepository(database)
+    except (OSError, ValueError, SQLAlchemyError) as exc:
+        logger.error("Event database is disabled: %s", exc)
+        if database is not None:
+            database.dispose()
+        database = None
+
+    return EventComponents(
+        event_manager=event_manager,
+        alert_manager=AlertManager(),
+        event_repository=event_repository,
+        database=database,
+    )
+
+
 def _create_frame_processor(
     video_source: VideoSource,
     processing_components: ProcessingComponents,
@@ -244,6 +296,19 @@ def _prepare_risk_logger(risk_logger: RiskLogger) -> None:
     risk_logger.prepare(DISPLAY_CAMERA_IDS)
 
 
+def _create_frame_risk_logger() -> RiskLogger | None:
+    """명시적으로 활성화된 경우에만 프레임 단위 JSONL 로그를 준비한다."""
+    try:
+        if not is_frame_risk_log_enabled(SYSTEM_CONFIG_PATH):
+            return None
+        risk_logger = RiskLogger()
+        _prepare_risk_logger(risk_logger)
+        return risk_logger
+    except (OSError, ValueError) as exc:
+        logger.warning("Frame risk log is disabled: %s", exc)
+        return None
+
+
 def _assign_display_camera_ids(video_sources: list[VideoSource]) -> None:
     """화면 슬롯 순서를 기준으로 camera_id를 cam_01~04로 고정한다.
 
@@ -288,7 +353,8 @@ def _create_video_sources(camera_configs: list[CameraConfig]) -> list[VideoSourc
 
 def _read_display_frame(
     camera_view: CameraViewState,
-    risk_logger: RiskLogger,
+    risk_logger: RiskLogger | None = None,
+    event_components: EventComponents | None = None,
 ) -> np.ndarray:
     """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다."""
     video_source = camera_view.video_source
@@ -304,12 +370,18 @@ def _read_display_frame(
         if processed_frame is None:
             return _make_blank_tile(f"{video_source.camera_id}: no frame")
 
-        # Risk Log: Zone/Risk 계산 결과를 프레임마다 JSONL로 남긴다(디버깅/검증용).
-        # FrameProcessor 내부에서는 파일 I/O를 하지 않고, 호출부인 여기서 기록한다.
-        risk_logger.log(
-            zone_result=processed_frame.zone_result,
-            risk_assessments=processed_frame.risk_assessments,
-        )
+        if risk_logger is not None:
+            risk_logger.log(
+                zone_result=processed_frame.zone_result,
+                risk_assessments=processed_frame.risk_assessments,
+            )
+
+        if event_components is not None:
+            transitions = event_components.event_manager.process(
+                zone_result=processed_frame.zone_result,
+                risk_assessments=processed_frame.risk_assessments,
+            )
+            _handle_event_transitions(event_components, transitions)
 
         frame = processed_frame.rendered_frame
         if frame is None:
@@ -328,6 +400,55 @@ def _read_display_frame(
 
     frame = _resize_tile(frame_packet.frame)
     return _draw_camera_label(frame=frame, label=video_source.camera_id)
+
+
+def _handle_event_transitions(
+    event_components: EventComponents,
+    transitions: list[EventTransition],
+) -> None:
+    """이벤트 상태 변화를 사용자 로그와 DB에 각각 전달한다."""
+    event_components.alert_manager.handle(transitions)
+    repository = event_components.event_repository
+    if repository is None:
+        return
+
+    for transition in transitions:
+        try:
+            if transition.transition_type is EventTransitionType.CREATED:
+                repository.create_event(transition.event)
+            elif transition.transition_type is EventTransitionType.ESCALATED:
+                _escalate_or_create_event(repository, transition)
+            else:
+                _resolve_or_create_event(repository, transition)
+        except (OSError, SQLAlchemyError, LookupError) as exc:
+            event = transition.event
+            logger.error(
+                "Event persistence failed: camera=%s person=%s equipment=%s: %s",
+                event.camera_id,
+                event.person_track_id,
+                event.equipment_track_id,
+                exc,
+            )
+
+
+def _escalate_or_create_event(
+    repository: EventRepository,
+    transition: EventTransition,
+) -> None:
+    try:
+        repository.escalate_event(transition.event)
+    except LookupError:
+        repository.create_event(transition.event)
+
+
+def _resolve_or_create_event(
+    repository: EventRepository,
+    transition: EventTransition,
+) -> None:
+    try:
+        repository.resolve_event(transition.event)
+    except LookupError:
+        repository.create_event(transition.event)
 
 
 def _compose_2x2_grid(

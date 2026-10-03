@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 from app.risk.models import RiskAssessment
 from app.zones.models import EquipmentZoneInfo, WorkerZoneInfo, ZoneFrameResult
 
@@ -99,6 +101,22 @@ class RiskLogger:
         하지 않는다.
         """
         return self._log_dir / f"risk_log_{camera_id}.jsonl"
+
+
+def is_frame_risk_log_enabled(config_path: Path) -> bool:
+    """system.yaml에서 프레임 단위 검증 로그 활성화 여부를 읽는다."""
+    with config_path.open("r", encoding="utf-8") as config_file:
+        try:
+            config = yaml.safe_load(config_file) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"invalid system config: {config_path}") from exc
+
+    enabled = config.get("diagnostics", {}).get(
+        "frame_risk_log_enabled", False
+    )
+    if not isinstance(enabled, bool):
+        raise ValueError("diagnostics.frame_risk_log_enabled must be boolean")
+    return enabled
 
 
 def _risk_assessment_to_row(
