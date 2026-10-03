@@ -17,7 +17,7 @@ from app.risk.models import RiskAssessment, RiskLevel
 # 내려가도록 하는 값이다. 위험도 상승은 이 값과 무관하게 항상 즉시 반영된다.
 ALERT_HOLD_SECONDS = 3.0
 
-# RiskLevel 간 우선순위를 명시적으로 정의한다. (NORMAL < WARNING < CRITICAL).
+# RiskLevel 간 우선순위를 명시적으로 정의한다. (NORMAL < WARNING < CRITICAL)
 _RISK_LEVEL_PRIORITY: dict[RiskLevel, int] = {
     RiskLevel.NORMAL: 0,
     RiskLevel.WARNING: 1,
