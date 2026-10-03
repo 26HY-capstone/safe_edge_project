@@ -1,8 +1,8 @@
 """Sound Alert 재생을 담당하는 모듈.
 
 EventManager가 만든 CameraAlertUpdate들을 보고 Sound를 "언제" 재생할지 판단하는
-순수 함수들과, 실제로 macOS afplay로 wav를 non-blocking 재생/중단하는
-LocalSoundPlayer로 구성된다.
+순수 함수들과, Windows에서는 winsound, macOS에서는 afplay로 wav를
+non-blocking 재생/중단하는 LocalSoundPlayer로 구성된다.
 
   1) EventManager의 ALERT_HOLD_SECONDS: camera Alert 상태(UI에 쓰이는 current_level)를
      최소 유지하는 시간. app/alerts/event_manager.py의 책임.
@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
 from app.alerts.models import CameraAlertUpdate
 from app.risk.models import RiskLevel
@@ -94,15 +96,15 @@ def get_new_sound_event_level(
 
 
 class LocalSoundPlayer:
-    """macOS afplay로 WARNING/CRITICAL 경고음을 non-blocking으로 재생/반복한다.
+    """운영체제 기본 기능으로 WARNING/CRITICAL 경고음을 비동기 재생한다.
 
     두 종류의 상태를 서로 독립적으로 관리한다:
       - Sound Alert cycle 상태(_current_alert_level, _cycle_started_at): "지금
         Sound로 알리고 있는 위험 레벨은 무엇이고 그 cycle이 언제 시작됐는가". 위험이
         유지되는 동안 SOUND_REEVALUATION_SECONDS마다 다시 재생하기 위해 쓴다.
-      - playback process 상태(_process): 실제 afplay subprocess. wav 파일 자체가
-        3초보다 먼저 끝나 자연 종료돼도 cycle 상태는 그대로 유지된다 — "소리가
-        꺼졌다"와 "위험이 해소됐다"는 서로 다른 사건이기 때문이다.
+      - playback 상태(_process, _windows_playing): macOS afplay subprocess 또는
+        Windows 비동기 PlaySound 실행 상태. wav 파일 자체가 3초보다 먼저 끝나도
+        cycle 상태는 유지된다. "소리가 끝남"과 "위험 해소"는 서로 다른 사건이다.
     """
 
     def __init__(
@@ -115,6 +117,7 @@ class LocalSoundPlayer:
             RiskLevel.CRITICAL: critical_sound_path,
         }
         self._process: subprocess.Popen | None = None
+        self._windows_playing = False
 
         # 현재 Sound Alert cycle이 대표하는 위험 레벨과 그 cycle의 시작 시각.
         # 둘 다 None이면 "현재 Sound로 알리고 있는 위험이 없다"는 뜻이다.
@@ -188,6 +191,10 @@ class LocalSoundPlayer:
 
     def _start_process(self, risk_level: RiskLevel) -> None:
         sound_path = self._sound_paths[risk_level]
+        if sys.platform == "win32":
+            self._start_windows_playback(sound_path)
+            return
+
         try:
             self._process = subprocess.Popen(
                 ["afplay", str(sound_path)],
@@ -203,6 +210,9 @@ class LocalSoundPlayer:
             self._process = None
 
     def _stop_current_process(self) -> None:
+        if self._windows_playing:
+            self._stop_windows_playback()
+
         if self._process is None:
             return
 
@@ -213,3 +223,30 @@ class LocalSoundPlayer:
             logger.exception("Failed to terminate sound playback process")
         finally:
             self._process = None
+
+    def _start_windows_playback(self, sound_path: Path) -> None:
+        try:
+            winsound = _load_winsound()
+            winsound.PlaySound(
+                str(sound_path),
+                winsound.SND_FILENAME | winsound.SND_ASYNC,
+            )
+            self._windows_playing = True
+        except (ImportError, OSError, RuntimeError):
+            logger.exception("Failed to start Windows sound playback: %s", sound_path)
+            self._windows_playing = False
+
+    def _stop_windows_playback(self) -> None:
+        try:
+            winsound = _load_winsound()
+            winsound.PlaySound(None, 0)
+        except (ImportError, OSError, RuntimeError):
+            logger.exception("Failed to stop Windows sound playback")
+        finally:
+            self._windows_playing = False
+
+
+def _load_winsound() -> Any:
+    import winsound
+
+    return winsound

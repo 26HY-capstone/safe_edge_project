@@ -1,7 +1,7 @@
 """app/alerts/sound.py의 Sound Alert "3초 재평가 + 반복 알림" 정책을 검증하는 테스트.
 
-실제 afplay를 실행하지 않도록 subprocess.Popen을 fake process로 교체하고,
-실제 time.sleep 대신 호출마다 전달하는 now 값으로 시간을 흉내낸다.
+macOS afplay와 Windows winsound를 fake로 교체하고, 실제 time.sleep 대신
+호출마다 전달하는 now 값으로 시간을 흉내낸다.
 """
 
 from __future__ import annotations
@@ -128,6 +128,7 @@ def _player_with_fake_popen(monkeypatch):
         created_processes.append(process)
         return process
 
+    monkeypatch.setattr(sound.sys, "platform", "darwin")
     monkeypatch.setattr(sound.subprocess, "Popen", fake_popen)
     return LocalSoundPlayer(), created_processes
 
@@ -376,6 +377,7 @@ def test_popen_failure_does_not_raise(monkeypatch) -> None:
     def fake_popen(args, **kwargs):
         raise OSError("no afplay")
 
+    monkeypatch.setattr(sound.sys, "platform", "darwin")
     monkeypatch.setattr(sound.subprocess, "Popen", fake_popen)
     player = LocalSoundPlayer()
 
@@ -394,6 +396,7 @@ def test_terminate_failure_does_not_raise(monkeypatch) -> None:
         created.append(process)
         return process
 
+    monkeypatch.setattr(sound.sys, "platform", "darwin")
     monkeypatch.setattr(sound.subprocess, "Popen", fake_popen)
     player = LocalSoundPlayer()
 
@@ -415,6 +418,69 @@ def test_close_without_playing_process_does_nothing(monkeypatch) -> None:
     player, _ = _player_with_fake_popen(monkeypatch)
 
     player.close()  # 아무 process도 없을 때 호출해도 예외가 없어야 한다.
+
+
+class _FakeWinSound:
+    SND_FILENAME = 1
+    SND_ASYNC = 2
+
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[tuple[str | None, int]] = []
+
+    def PlaySound(self, path: str | None, flags: int) -> None:
+        if self.fail:
+            raise RuntimeError("winsound failure")
+        self.calls.append((path, flags))
+
+
+def test_windows_uses_async_winsound_and_stops_on_close(monkeypatch) -> None:
+    fake_winsound = _FakeWinSound()
+    monkeypatch.setattr(sound.sys, "platform", "win32")
+    monkeypatch.setattr(sound, "_load_winsound", lambda: fake_winsound)
+    player = LocalSoundPlayer()
+
+    player.update([_update(RiskLevel.WARNING)], now=0.0)
+    player.close()
+
+    assert fake_winsound.calls == [
+        (
+            str(sound.WARNING_SOUND_PATH),
+            fake_winsound.SND_FILENAME | fake_winsound.SND_ASYNC,
+        ),
+        (None, 0),
+    ]
+
+
+def test_windows_escalation_stops_warning_before_critical(monkeypatch) -> None:
+    fake_winsound = _FakeWinSound()
+    monkeypatch.setattr(sound.sys, "platform", "win32")
+    monkeypatch.setattr(sound, "_load_winsound", lambda: fake_winsound)
+    player = LocalSoundPlayer()
+
+    player.update([_update(RiskLevel.WARNING)], now=0.0)
+    player.update([_update(RiskLevel.CRITICAL)], now=0.5)
+
+    assert fake_winsound.calls == [
+        (
+            str(sound.WARNING_SOUND_PATH),
+            fake_winsound.SND_FILENAME | fake_winsound.SND_ASYNC,
+        ),
+        (None, 0),
+        (
+            str(sound.CRITICAL_SOUND_PATH),
+            fake_winsound.SND_FILENAME | fake_winsound.SND_ASYNC,
+        ),
+    ]
+
+
+def test_windows_playback_failure_does_not_raise(monkeypatch) -> None:
+    fake_winsound = _FakeWinSound(fail=True)
+    monkeypatch.setattr(sound.sys, "platform", "win32")
+    monkeypatch.setattr(sound, "_load_winsound", lambda: fake_winsound)
+    player = LocalSoundPlayer()
+
+    player.update([_update(RiskLevel.WARNING)], now=0.0)
 
 
 # main.py의 Sound orchestration(_dispatch_sound_alert)은 app/alerts/alert_manager.py의
