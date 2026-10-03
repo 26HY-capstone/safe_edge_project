@@ -121,6 +121,12 @@ PyTorch `.pt` 모델과 TensorRT `.engine` 모델을 동일 인터페이스에�
 - Local/Server: PyTorch
 - Jetson: TensorRT
 
+개발 장비별 ONNX 실행 브랜치는 동일한 `Detector` 계약을 유지한다.
+
+- `feature/mac-gpu`: CoreML Execution Provider를 우선 사용하고 CPU fallback을 허용한다.
+- CoreML 설정은 `MLComputeUnits=ALL`을 사용하여 지원되는 Apple CPU, GPU와 Neural Engine을 활용한다.
+- 실제 활성 provider는 애플리케이션 시작 로그에서 확인하고 CPU 실행 결과와 FPS 및 latency를 비교한다.
+
 ## 6. PPE 탐지
 
 작업자의 PPE 착용 여부를 판단한다.

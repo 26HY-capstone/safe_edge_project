@@ -5,7 +5,10 @@ detector:
   # backend는 pytorch, onnx, tensorrt 중 실행 환경에 맞게 선택한다.
   backend: onnx
   model_path: models/model.onnx
-  device: cpu
+  # macOS 공식 onnxruntime wheel의 CoreML EP를 우선 사용한다.
+  # MLComputeUnits=ALL로 CPU, GPU와 Apple Neural Engine을 활용할 수 있게 한다.
+  device: coreml
+  allow_cpu_fallback: true
   input_size: 640
   confidence_threshold: 0.25
   iou_threshold: 0.45

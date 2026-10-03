@@ -49,6 +49,7 @@ runs/
 wandb/
 training/runs/
 training/logs/
+/Ultralytics/
 
 # Dataset
 datasets/
