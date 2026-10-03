@@ -5,6 +5,7 @@ from __future__ import annotations
 from ast import literal_eval
 from collections.abc import Mapping
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +16,16 @@ import yaml
 from app.inference.detector import Detection, Detector
 from app.video.video_source import PROJECT_ROOT
 
+logger = logging.getLogger(__name__)
+
+ProviderSpec = str | tuple[str, dict[str, str]]
+
 
 @dataclass(frozen=True, slots=True)
 class ONNXDetectorConfig:
     model_path: Path
     device: str = "cpu"
+    allow_cpu_fallback: bool = True
     input_size: int = 640
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.45
@@ -93,8 +99,18 @@ class ONNXYOLODetector(Detector):
         providers = _providers_for_device(
             device=self.config.device,
             available_providers=available_providers,
+            allow_cpu_fallback=self.config.allow_cpu_fallback,
         )
-        return ort.InferenceSession(str(resolved_model_path), providers=providers)
+        session = ort.InferenceSession(
+            str(resolved_model_path),
+            providers=providers,
+        )
+        logger.info(
+            "ONNX Runtime execution providers: requested=%s active=%s",
+            self.config.device,
+            session.get_providers(),
+        )
+        return session
 
     def _single_input(self) -> Any:
         inputs = self._session.get_inputs()
@@ -274,6 +290,11 @@ def load_onnx_detector_config(
     return ONNXDetectorConfig(
         model_path=Path(str(detector_config.get("model_path", ""))),
         device=str(detector_config.get("device", "cpu")),
+        allow_cpu_fallback=_required_bool(
+            detector_config,
+            "allow_cpu_fallback",
+            default=True,
+        ),
         input_size=int(detector_config.get("input_size", 640)),
         confidence_threshold=float(
             detector_config.get("confidence_threshold", 0.25)
@@ -286,22 +307,93 @@ def load_onnx_detector_config(
 def _providers_for_device(
     device: str,
     available_providers: list[str],
-) -> list[str]:
+    allow_cpu_fallback: bool = True,
+) -> list[ProviderSpec]:
     normalized_device = device.strip().lower()
     if normalized_device == "cpu":
-        if "CPUExecutionProvider" not in available_providers:
-            raise RuntimeError("ONNX Runtime CPUExecutionProvider is unavailable")
-        return ["CPUExecutionProvider"]
+        return _cpu_provider(available_providers)
 
     if normalized_device.startswith("cuda"):
-        if "CUDAExecutionProvider" not in available_providers:
-            raise RuntimeError(
-                "CUDAExecutionProvider is unavailable; install onnxruntime-gpu "
-                "and verify CUDA compatibility"
-            )
-        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if "CUDAExecutionProvider" in available_providers:
+            device_id = _cuda_device_id(normalized_device)
+            return [
+                ("CUDAExecutionProvider", {"device_id": device_id}),
+                *_cpu_provider(available_providers),
+            ]
+        return _fallback_or_raise(
+            requested_provider="CUDAExecutionProvider",
+            available_providers=available_providers,
+            allow_cpu_fallback=allow_cpu_fallback,
+            install_hint=(
+                "install onnxruntime-gpu and verify CUDA/cuDNN compatibility"
+            ),
+        )
+
+    if normalized_device == "coreml":
+        if "CoreMLExecutionProvider" in available_providers:
+            return [
+                (
+                    "CoreMLExecutionProvider",
+                    {
+                        "ModelFormat": "MLProgram",
+                        "MLComputeUnits": "ALL",
+                        "RequireStaticInputShapes": "1",
+                    },
+                ),
+                *_cpu_provider(available_providers),
+            ]
+        return _fallback_or_raise(
+            requested_provider="CoreMLExecutionProvider",
+            available_providers=available_providers,
+            allow_cpu_fallback=allow_cpu_fallback,
+            install_hint=(
+                "install the official macOS onnxruntime wheel with CoreML support"
+            ),
+        )
 
     raise ValueError(f"unsupported ONNX device: {device}")
+
+
+def _cpu_provider(available_providers: list[str]) -> list[str]:
+    if "CPUExecutionProvider" not in available_providers:
+        raise RuntimeError("ONNX Runtime CPUExecutionProvider is unavailable")
+    return ["CPUExecutionProvider"]
+
+
+def _fallback_or_raise(
+    requested_provider: str,
+    available_providers: list[str],
+    allow_cpu_fallback: bool,
+    install_hint: str,
+) -> list[str]:
+    if not allow_cpu_fallback:
+        raise RuntimeError(f"{requested_provider} is unavailable; {install_hint}")
+
+    logger.warning(
+        "%s is unavailable; falling back to CPUExecutionProvider",
+        requested_provider,
+    )
+    return _cpu_provider(available_providers)
+
+
+def _cuda_device_id(device: str) -> str:
+    if ":" not in device:
+        return "0"
+    _, raw_device_id = device.split(":", maxsplit=1)
+    if not raw_device_id.isdigit():
+        raise ValueError(f"invalid CUDA device: {device}")
+    return raw_device_id
+
+
+def _required_bool(
+    values: Mapping[str, object],
+    key: str,
+    default: bool,
+) -> bool:
+    value = values.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"detector {key} must be boolean")
+    return value
 
 
 def _restore_original_xyxy(
