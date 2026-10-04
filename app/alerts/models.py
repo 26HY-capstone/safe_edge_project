@@ -1,4 +1,4 @@
-"""위험 이벤트 생명주기에서 사용하는 데이터 계약."""
+"""Alert 계층에서 사용하는 이벤트와 camera 단위 상태 데이터 계약."""
 
 from __future__ import annotations
 
@@ -54,7 +54,27 @@ class EventTransitionType(Enum):
 
 @dataclass(frozen=True, slots=True)
 class EventTransition:
-    """EventManager가 외부 계층에 전달하는 상태 변화."""
+    """위험 이벤트 생명주기에서 외부 계층에 전달하는 상태 변화."""
 
     transition_type: EventTransitionType
     event: RiskEvent
+
+
+@dataclass(slots=True)
+class CameraAlertState:
+    """카메라별 화면/소리 Alert 상태."""
+
+    camera_id: str
+    risk_level: RiskLevel
+    state_started_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class CameraAlertUpdate:
+    """카메라별 Alert 상태 갱신 결과."""
+
+    camera_id: str
+    previous_level: RiskLevel
+    current_level: RiskLevel
+    changed: bool
+    state_started_at: float

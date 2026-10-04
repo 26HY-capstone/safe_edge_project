@@ -36,9 +36,9 @@ class _FakeYOLOModel:
     names = {0: "person", 6: "forklift"}
 
     def __init__(self) -> None:
-        self.predict_kwargs = None
+        self.predict_kwargs: dict[str, object] = {}
 
-    def predict(self, **kwargs):
+    def predict(self, **kwargs: object) -> list[_FakeResult]:
         self.predict_kwargs = kwargs
         return [_FakeResult()]
 

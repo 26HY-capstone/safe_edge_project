@@ -1,4 +1,4 @@
-"""위험 판단 결과를 중복 없는 이벤트 생명주기로 변환한다."""
+"""카메라 Alert 상태와 위험 이벤트 생명주기를 관리하는 모듈."""
 
 from __future__ import annotations
 
@@ -6,10 +6,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 import yaml
 
 from app.alerts.models import (
+    CameraAlertState,
+    CameraAlertUpdate,
     EventKey,
     EventTransition,
     EventTransitionType,
@@ -17,6 +20,71 @@ from app.alerts.models import (
 )
 from app.risk.models import RiskAssessment, RiskLevel
 from app.zones.models import ZoneFrameResult
+
+ALERT_HOLD_SECONDS = 3.0
+
+_RISK_LEVEL_PRIORITY: dict[RiskLevel, int] = {
+    RiskLevel.NORMAL: 0,
+    RiskLevel.WARNING: 1,
+    RiskLevel.CRITICAL: 2,
+}
+
+
+def get_highest_risk_level(risk_assessments: list[RiskAssessment]) -> RiskLevel:
+    """한 카메라의 RiskAssessment 목록에서 가장 높은 RiskLevel을 계산한다."""
+    if not risk_assessments:
+        return RiskLevel.NORMAL
+
+    return max(
+        (assessment.risk_level for assessment in risk_assessments),
+        key=lambda risk_level: _RISK_LEVEL_PRIORITY[risk_level],
+    )
+
+
+class EventManager:
+    """camera_id별 화면/소리 Alert 상태를 독립적으로 관리한다."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._states: dict[str, CameraAlertState] = {}
+
+    def update(
+        self,
+        camera_id: str,
+        risk_assessments: list[RiskAssessment],
+    ) -> CameraAlertUpdate:
+        """한 프레임의 RiskAssessment로 camera_id의 Alert 상태를 갱신한다."""
+        observed_level = get_highest_risk_level(risk_assessments)
+        now = self._clock()
+
+        state = self._states.get(camera_id)
+        if state is None:
+            state = CameraAlertState(
+                camera_id=camera_id,
+                risk_level=RiskLevel.NORMAL,
+                state_started_at=now,
+            )
+            self._states[camera_id] = state
+
+        previous_level = state.risk_level
+        new_level, changed = _resolve_next_level(
+            current_level=state.risk_level,
+            observed_level=observed_level,
+            state_started_at=state.state_started_at,
+            now=now,
+        )
+
+        if changed:
+            state.risk_level = new_level
+            state.state_started_at = now
+
+        return CameraAlertUpdate(
+            camera_id=camera_id,
+            previous_level=previous_level,
+            current_level=state.risk_level,
+            changed=changed,
+            state_started_at=state.state_started_at,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,8 +107,8 @@ class _ResolvedEvent:
     resolved_utc: datetime
 
 
-class EventManager:
-    """카메라별 작업자-설비 조합의 위험 이벤트 상태를 관리한다."""
+class RiskEventManager:
+    """카메라별 작업자-설비 조합의 DB 저장용 위험 이벤트 상태를 관리한다."""
 
     def __init__(
         self,
@@ -59,9 +127,7 @@ class EventManager:
     ) -> list[EventTransition]:
         """한 프레임의 위험 판정을 이벤트 상태 변화로 변환한다."""
         now_utc = _normalize_utc(self._clock())
-        workers_by_id = {
-            worker.person_id: worker for worker in zone_result.workers
-        }
+        workers_by_id = {worker.person_id: worker for worker in zone_result.workers}
         dangerous_keys: set[EventKey] = set()
         transitions: list[EventTransition] = []
 
@@ -143,9 +209,7 @@ class EventManager:
             last_utc=now_utc,
             last_source_timestamp_sec=assessment.timestamp,
             person_bottom_center=person_bottom_center,
-            risk_level=(
-                assessment.risk_level if escalated else current_event.risk_level
-            ),
+            risk_level=assessment.risk_level if escalated else current_event.risk_level,
         )
         self._active_events[key] = updated_event
 
@@ -192,9 +256,7 @@ class EventManager:
                 event=event,
                 resolved_utc=now_utc,
             )
-            transitions.append(
-                EventTransition(EventTransitionType.RESOLVED, event)
-            )
+            transitions.append(EventTransition(EventTransitionType.RESOLVED, event))
 
         return transitions
 
@@ -205,8 +267,8 @@ class EventManager:
                 del self._recently_resolved_events[key]
 
 
-def create_event_manager_from_system_config(config_path: Path) -> EventManager:
-    """system.yaml의 risk 설정으로 EventManager를 생성한다."""
+def create_risk_event_manager_from_system_config(config_path: Path) -> RiskEventManager:
+    """system.yaml의 risk 설정으로 RiskEventManager를 생성한다."""
     with config_path.open("r", encoding="utf-8") as config_file:
         try:
             config = yaml.safe_load(config_file) or {}
@@ -218,11 +280,31 @@ def create_event_manager_from_system_config(config_path: Path) -> EventManager:
         resolve_grace_seconds=float(
             risk_config.get("event_resolve_grace_seconds", 1.0)
         ),
-        cooldown_seconds=float(
-            risk_config.get("event_cooldown_seconds", 5.0)
-        ),
+        cooldown_seconds=float(risk_config.get("event_cooldown_seconds", 5.0)),
     )
-    return EventManager(policy=policy)
+    return RiskEventManager(policy=policy)
+
+
+def _resolve_next_level(
+    current_level: RiskLevel,
+    observed_level: RiskLevel,
+    state_started_at: float,
+    now: float,
+) -> tuple[RiskLevel, bool]:
+    """현재 Alert 상태와 이번 프레임 위험도를 비교해 다음 상태를 결정한다."""
+    current_priority = _RISK_LEVEL_PRIORITY[current_level]
+    observed_priority = _RISK_LEVEL_PRIORITY[observed_level]
+
+    if observed_priority > current_priority:
+        return observed_level, True
+
+    if observed_priority == current_priority:
+        return current_level, False
+
+    if now - state_started_at >= ALERT_HOLD_SECONDS:
+        return observed_level, True
+
+    return current_level, False
 
 
 def _normalize_utc(value: datetime) -> datetime:
@@ -232,8 +314,4 @@ def _normalize_utc(value: datetime) -> datetime:
 
 
 def _risk_rank(risk_level: RiskLevel) -> int:
-    return {
-        RiskLevel.NORMAL: 0,
-        RiskLevel.WARNING: 1,
-        RiskLevel.CRITICAL: 2,
-    }[risk_level]
+    return _RISK_LEVEL_PRIORITY[risk_level]

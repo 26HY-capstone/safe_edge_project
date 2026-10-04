@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import time
 
 import cv2
 import numpy as np
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.alerts.alert_manager import AlertManager
+from app.alerts.alert_renderer import draw_alert_overlay
 from app.alerts.event_manager import (
-    EventManager,
-    create_event_manager_from_system_config,
+    RiskEventManager,
+    create_risk_event_manager_from_system_config,
 )
-from app.alerts.models import EventTransition, EventTransitionType
+from app.alerts.models import CameraAlertUpdate, EventTransition, EventTransitionType
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
 from app.risk.risk_engine import RiskEngine
@@ -40,6 +42,11 @@ TILE_WIDTH = 640
 TILE_HEIGHT = 360
 MAX_VIEW_COUNT = 4
 DEFAULT_SAMPLE_DIR = PROJECT_ROOT / "data" / "samples" / "forklift_human_nearmiss"
+# cam_03(ceiling)/cam_04(eye)에 쓸 샘플 영상을 고정하고 싶을 때만 정수로 지정한다.
+# None이면 실행마다 무작위로 run/ceiling/eye가 선택된다. 아래의 None = 값을 바꿔가며 실행해 터미널의
+# "[sample video] cam_03: ..." 출력으로 원하는 파일이 나오는 seed를 찾으면 된다.
+# 현재 테스트 가능한 seed 번호: 4, 7, 15 (15번 이후 미확인. 확인 필요.)
+SAMPLE_VIDEO_SEED: int | None = 15
 MODEL_CONFIG_PATH = PROJECT_ROOT / "config" / "model.yaml"
 SYSTEM_CONFIG_PATH = PROJECT_ROOT / "config" / "system.yaml"
 
@@ -61,7 +68,7 @@ class ProcessingComponents:
 
 @dataclass(slots=True)
 class EventComponents:
-    event_manager: EventManager
+    risk_event_manager: RiskEventManager
     alert_manager: AlertManager
     event_repository: EventRepository | None
     database: Database | None
@@ -93,14 +100,39 @@ class DisplayState:
     button_bounds: list[ButtonBounds]
 
 
+@dataclass(slots=True)
+class DisplayFrameResult:
+    """_read_display_frame() 한 번의 결과: 화면에 쓸 frame과 Sound 판단용 Alert 결과.
+
+    frame은 camera OFF/분석 불가 상태에서도 항상 채워진다(blank tile 또는 raw frame).
+    alert_update는 이번 cycle에 Risk 분석이 실제로 성공해 AlertManager가 그 camera의
+    Alert 상태를 갱신한 경우에만 채워지고, 그 외에는 None이다. main loop는 이 None 여부로
+    "Sound 판단에 포함할 camera"를 걸러낸다.
+    """
+
+    frame: np.ndarray
+    alert_update: CameraAlertUpdate | None
+
+
 def main() -> None:
     """설정된 영상 입력을 최대 4개까지 한 창의 2x2 화면으로 표시한다."""
     camera_configs = load_camera_configs()
     video_sources = _create_display_video_sources(camera_configs)
     _assign_display_camera_ids(video_sources)
+
+    # cam_03/04는 실행마다 샘플 ceiling/eye 영상이 무작위로 바뀌어
+    # 영상 확인을 위해 디버깅용으로 실행 시 한 번 터미널에 출력한다.
+    for video_source in video_sources[2:4]:
+        print(f"[sample video] {video_source.camera_id}: {video_source.source}")
+
     processing_components = _create_processing_components(video_sources)
     event_components = _create_event_components()
     risk_logger = _create_frame_risk_logger()
+
+    # Alert: camera별 Alert 상태(hold/escalation/de-escalation)와 Sound 재생을
+    # AlertManager가 함께 관리한다. 내부에 시간 기반 상태를 들고 있으므로 실행 중
+    # 단 하나만 만들어 계속 재사용한다.
+    alert_manager = AlertManager()
 
     display_state = DisplayState(
         camera_views=[
@@ -121,14 +153,30 @@ def main() -> None:
         cv2.setMouseCallback(WINDOW_NAME, _handle_mouse_event, display_state)
 
         while True:
-            frames = [
+            # 한 번의 2x2 화면 갱신에서는 모든 camera가 같은 now를 기준으로
+            # blink를 계산하도록 루프당 한 번만 시각을 읽는다.
+            now = time.monotonic()
+            results = [
                 _read_display_frame(
                     camera_view,
                     risk_logger=risk_logger,
                     event_components=event_components,
+                    alert_manager=alert_manager,
+                    now=now,
                 )
                 for camera_view in display_state.camera_views
             ]
+            frames = [result.frame for result in results]
+
+            # Alert: 이번 cycle에서 분석이 성공한 camera들의 CameraAlertUpdate만
+            # 모아(개별 camera 처리 즉시가 아니라) 한 번만 Sound 상태를 갱신한다.
+            alert_updates = [
+                result.alert_update
+                for result in results
+                if result.alert_update is not None
+            ]
+            alert_manager.update_sound(alert_updates=alert_updates, now=now)
+
             display_frame, button_bounds = _compose_2x2_grid(
                 frames=frames,
                 camera_views=display_state.camera_views,
@@ -141,10 +189,11 @@ def main() -> None:
     finally:
         _handle_event_transitions(
             event_components,
-            event_components.event_manager.resolve_all(),
+            event_components.risk_event_manager.resolve_all(),
         )
         if event_components.database is not None:
             event_components.database.dispose()
+        alert_manager.close()
         for camera_view in display_state.camera_views:
             camera_view.video_source.close()
         cv2.destroyAllWindows()
@@ -225,10 +274,12 @@ def _create_tracker() -> Tracker:
 def _create_event_components() -> EventComponents:
     """이벤트 상태·로그를 만들고, 가능한 경우 SQLite 저장소를 연결한다."""
     try:
-        event_manager = create_event_manager_from_system_config(SYSTEM_CONFIG_PATH)
+        risk_event_manager = create_risk_event_manager_from_system_config(
+            SYSTEM_CONFIG_PATH
+        )
     except (OSError, ValueError) as exc:
         logger.warning("Event policy uses defaults: %s", exc)
-        event_manager = EventManager()
+        risk_event_manager = RiskEventManager()
 
     database: Database | None = None
     event_repository: EventRepository | None = None
@@ -243,7 +294,7 @@ def _create_event_components() -> EventComponents:
         database = None
 
     return EventComponents(
-        event_manager=event_manager,
+        risk_event_manager=risk_event_manager,
         alert_manager=AlertManager(),
         event_repository=event_repository,
         database=database,
@@ -332,6 +383,7 @@ def _create_sample_video_sources() -> list[VideoSource]:
         return create_random_ceiling_eye_video_sources(
             sample_dir=DEFAULT_SAMPLE_DIR,
             loop=True,
+            seed=SAMPLE_VIDEO_SEED,
         )
     except (FileNotFoundError, ValueError):
         return []
@@ -354,21 +406,38 @@ def _create_video_sources(camera_configs: list[CameraConfig]) -> list[VideoSourc
 def _read_display_frame(
     camera_view: CameraViewState,
     risk_logger: RiskLogger | None = None,
+    alert_manager: AlertManager | None = None,
     event_components: EventComponents | None = None,
-) -> np.ndarray:
-    """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다."""
+    now: float = 0.0,
+) -> DisplayFrameResult:
+    """단일 입력에서 프레임을 읽고 4분할 타일 크기로 변환한다.
+
+    alert_update는 이번 호출에서 Risk 분석이 실제로 성공해 AlertManager가 그
+    camera의 Alert 상태를 갱신한 경우에만 채워진다(Sound 판단에서 이 camera를
+    포함시키기 위함). camera OFF, 입력 실패, processor 없음 등 분석이 아예
+    이뤄지지 않은 경우에는 항상 None이다.
+    """
     video_source = camera_view.video_source
     if not camera_view.enabled:
-        return _make_blank_tile(f"{video_source.camera_id}: off")
+        return DisplayFrameResult(
+            frame=_make_blank_tile(f"{video_source.camera_id}: off"),
+            alert_update=None,
+        )
 
     if camera_view.processor is not None:
         try:
             processed_frame = camera_view.processor.process_next()
         except (FileNotFoundError, VideoSourceError):
-            return _make_blank_tile(f"{video_source.camera_id}: no input")
+            return DisplayFrameResult(
+                frame=_make_blank_tile(f"{video_source.camera_id}: no input"),
+                alert_update=None,
+            )
 
         if processed_frame is None:
-            return _make_blank_tile(f"{video_source.camera_id}: no frame")
+            return DisplayFrameResult(
+                frame=_make_blank_tile(f"{video_source.camera_id}: no frame"),
+                alert_update=None,
+            )
 
         if risk_logger is not None:
             risk_logger.log(
@@ -377,7 +446,7 @@ def _read_display_frame(
             )
 
         if event_components is not None:
-            transitions = event_components.event_manager.process(
+            transitions = event_components.risk_event_manager.process(
                 zone_result=processed_frame.zone_result,
                 risk_assessments=processed_frame.risk_assessments,
             )
@@ -388,18 +457,42 @@ def _read_display_frame(
             frame = processed_frame.frame_packet.frame
 
         frame = _resize_tile(frame)
-        return _draw_camera_label(frame=frame, label=video_source.camera_id)
+        frame = _draw_camera_label(frame=frame, label=video_source.camera_id)
 
+        if alert_manager is None:
+            return DisplayFrameResult(frame=frame, alert_update=None)
+
+        # Alert UI: 분석이 실제로 성공한 경우(이 분기)에만 camera의 Alert 상태를
+        # 갱신하고 renderer에게 그리기를 맡긴다. camera OFF나 처리 실패 시에는 이
+        # 분기에 들어오지 않으므로 Alert UI도 자연히 표시되지 않는다.
+        camera_alert_update = alert_manager.update_camera(
+            camera_id=video_source.camera_id,
+            risk_assessments=processed_frame.risk_assessments,
+        )
+        draw_alert_overlay(frame=frame, camera_alert_update=camera_alert_update, now=now)
+
+        return DisplayFrameResult(frame=frame, alert_update=camera_alert_update)
+
+    # processor가 없는 입력(detector 비활성 등)은 Risk 분석 결과 자체가 없으므로
+    # Alert badge/border를 그리지 않는다. NORMAL로 대체 표시하지 않는 것이 중요하다
+    # (NORMAL은 "분석 결과가 정상"이라는 뜻이고, 여기는 분석이 아예 안 되는 상태다).
     try:
         frame_packet = video_source.read()
     except (FileNotFoundError, VideoSourceError):
-        return _make_blank_tile(f"{video_source.camera_id}: no input")
+        return DisplayFrameResult(
+            frame=_make_blank_tile(f"{video_source.camera_id}: no input"),
+            alert_update=None,
+        )
 
     if frame_packet is None:
-        return _make_blank_tile(f"{video_source.camera_id}: no frame")
+        return DisplayFrameResult(
+            frame=_make_blank_tile(f"{video_source.camera_id}: no frame"),
+            alert_update=None,
+        )
 
     frame = _resize_tile(frame_packet.frame)
-    return _draw_camera_label(frame=frame, label=video_source.camera_id)
+    frame = _draw_camera_label(frame=frame, label=video_source.camera_id)
+    return DisplayFrameResult(frame=frame, alert_update=None)
 
 
 def _handle_event_transitions(
