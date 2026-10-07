@@ -39,6 +39,8 @@ class _FakeProcessedFrame:
         )
     )
     risk_assessments: list = field(default_factory=list)
+    tracked_objects: list = field(default_factory=list)
+    ppe_risk_assessments: list = field(default_factory=list)
 
 
 class _FakeProcessor:

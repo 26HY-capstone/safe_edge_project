@@ -24,7 +24,8 @@ detector:
     9: harness_body
 
 ppe:
-  # PPE는 주기 실행 또는 trigger 기반 ROI 추론으로 실행한다.
+  # 아래 값은 향후 ROI 재추론용이며 현재 통합 모델 공간 매칭에서는 사용하지 않는다.
+  # 현재는 매 프레임 helmet/gloves/safety_vest/harness_body를 person track에 연결한다.
   refresh_interval_seconds: 5
   new_worker_immediate_check: true
   roi_margin_ratio: 0.15

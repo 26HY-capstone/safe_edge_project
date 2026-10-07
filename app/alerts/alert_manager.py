@@ -11,6 +11,7 @@ from __future__ import annotations
 from app.alerts.event_manager import EventManager
 from app.alerts.models import CameraAlertUpdate
 from app.alerts.sound import LocalSoundPlayer
+from app.risk.ppe_risk import PPERiskAssessment
 from app.risk.models import RiskAssessment
 
 
@@ -32,7 +33,7 @@ class AlertManager:
     def update_camera(
         self,
         camera_id: str,
-        risk_assessments: list[RiskAssessment],
+        risk_assessments: list[RiskAssessment | PPERiskAssessment],
     ) -> CameraAlertUpdate:
         """한 camera의 이번 프레임 RiskAssessment로 Alert 상태를 갱신하고 반환한다.
 

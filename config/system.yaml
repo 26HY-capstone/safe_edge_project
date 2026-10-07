@@ -29,3 +29,9 @@ performance:
   target_fps: 10
   frame_skip: 1
   report_p95_latency: true
+
+# PPE 미착용 경고: 연속 누락이 지속될 때 WARNING, 착용 재탐지 시 누적 해제.
+ppe_risk:
+  required_classes: [helmet, gloves, safety_vest]
+  missing_seconds: 1.0
+  max_observation_gap_seconds: 2.0

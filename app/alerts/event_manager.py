@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 
 from app.alerts.models import CameraAlertState, CameraAlertUpdate
+from app.risk.ppe_risk import PPERiskAssessment
 from app.risk.models import RiskAssessment, RiskLevel
 
 # hold 정책의 "최소 유지 시간".
@@ -25,7 +26,7 @@ _RISK_LEVEL_PRIORITY: dict[RiskLevel, int] = {
 }
 
 
-def get_highest_risk_level(risk_assessments: list[RiskAssessment]) -> RiskLevel:
+def get_highest_risk_level(risk_assessments: list[RiskAssessment | PPERiskAssessment]) -> RiskLevel:
     """한 카메라의 RiskAssessment 목록에서 가장 높은 RiskLevel을 계산한다."""
     if not risk_assessments:
         return RiskLevel.NORMAL
@@ -59,7 +60,7 @@ class EventManager:
     def update(
         self,
         camera_id: str,
-        risk_assessments: list[RiskAssessment],
+        risk_assessments: list[RiskAssessment | PPERiskAssessment],
     ) -> CameraAlertUpdate:
         """한 프레임의 RiskAssessment로 camera_id의 Alert 상태를 갱신한다.
 
