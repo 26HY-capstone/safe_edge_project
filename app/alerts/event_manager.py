@@ -1,24 +1,29 @@
-"""camera별 Risk 결과를 집계하고 Alert 상태를 관리하는 모듈.
-
-Risk 계층(RiskAssessment)과 향후 UI/Sound 계층 사이에 새로 추가되는 소비 계층이다.
-이미 계산된 RiskAssessment를 읽어 camera 단위 상태를 만든다.
-"""
+"""카메라 Alert 상태와 위험 이벤트 생명주기를 관리하는 모듈."""
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from pathlib import Path
+import time
 
-from app.alerts.models import CameraAlertState, CameraAlertUpdate
+import yaml
+
+from app.alerts.models import (
+    CameraAlertState,
+    CameraAlertUpdate,
+    EventKey,
+    EventTransition,
+    EventTransitionType,
+    RiskEvent,
+)
 from app.risk.ppe_risk import PPERiskAssessment
 from app.risk.models import RiskAssessment, RiskLevel
+from app.zones.models import ZoneFrameResult
 
-# hold 정책의 "최소 유지 시간".
-# 한 번 전환된 Alert 상태를 최소 이 시간만큼 유지한 뒤에야 더 낮은 위험도로
-# 내려가도록 하는 값이다. 위험도 상승은 이 값과 무관하게 항상 즉시 반영된다.
 ALERT_HOLD_SECONDS = 3.0
 
-# RiskLevel 간 우선순위를 명시적으로 정의한다. (NORMAL < WARNING < CRITICAL).
 _RISK_LEVEL_PRIORITY: dict[RiskLevel, int] = {
     RiskLevel.NORMAL: 0,
     RiskLevel.WARNING: 1,
@@ -38,22 +43,9 @@ def get_highest_risk_level(risk_assessments: list[RiskAssessment | PPERiskAssess
 
 
 class EventManager:
-    """camera_id별 Alert 상태(RiskLevel + hold 시각)를 독립적으로 관리한다.
-
-    - 위험도가 오르면 hold와 무관하게 즉시 반영한다.
-    - 같은 RiskLevel이 계속 관측되면 상태를 바꾸지 않는다. 즉 hold 시작 시각을
-      매 frame 다시 기록하지 않는다.
-    - 위험도가 내려가면 현재 상태가 ALERT_HOLD_SECONDS 이상 유지된 뒤에만
-      반영한다. 
-    - 레벨이 실제로 바뀌는 순간에는 새 상태의 시작 시각을 다시 기록한다. 
-      하락으로 도달한 새 레벨도 동일하게 3초 hold가 적용한다.
-    """
+    """camera_id별 화면/소리 Alert 상태를 독립적으로 관리한다."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        # clock: 실제 운영에서는 time.monotonic. frame_index/FPS로 시간을 계산하면
-        # 영상 재생 속도나 frame skip에 따라 흔들릴 수 있어 쓰지 않는다. 테스트에서는
-        # 원하는 시각으로 직접 이동시킬 수 있는 fake clock을 주입해 real sleep 없이
-        # hold 동작을 검증한다.
         self._clock = clock
         self._states: dict[str, CameraAlertState] = {}
 
@@ -62,18 +54,12 @@ class EventManager:
         camera_id: str,
         risk_assessments: list[RiskAssessment | PPERiskAssessment],
     ) -> CameraAlertUpdate:
-        """한 프레임의 RiskAssessment로 camera_id의 Alert 상태를 갱신한다.
-
-        risk_assessments를 집계해 이번 프레임의 observed RiskLevel을 구하고,
-        그 camera_id의 기존 상태(처음 보는 camera_id면 NORMAL로 간주)와 비교해
-        escalation/동일 레벨 지속/de-escalation 중 하나로 처리한다.
-        """
+        """한 프레임의 RiskAssessment로 camera_id의 Alert 상태를 갱신한다."""
         observed_level = get_highest_risk_level(risk_assessments)
         now = self._clock()
 
         state = self._states.get(camera_id)
         if state is None:
-            # 처음 보는 camera_id는 NORMAL에서 시작한 것으로 간주한다.
             state = CameraAlertState(
                 camera_id=camera_id,
                 risk_level=RiskLevel.NORMAL,
@@ -90,9 +76,6 @@ class EventManager:
         )
 
         if changed:
-            # RiskLevel이 실제로 바뀌는 순간에만 시작 시각을 다시 기록한다.
-            # 동일 레벨이 계속 관측되는 경우는 이 분기를 타지 않으므로
-            # hold 타이머가 매 frame 리셋되지 않는다.
             state.risk_level = new_level
             state.state_started_at = now
 
@@ -105,30 +88,231 @@ class EventManager:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class EventPolicy:
+    """위험 이벤트 종료와 재진입 판단에 사용하는 시간 정책."""
+
+    resolve_grace_seconds: float = 1.0
+    cooldown_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        if self.resolve_grace_seconds < 0:
+            raise ValueError("resolve_grace_seconds must be non-negative")
+        if self.cooldown_seconds < 0:
+            raise ValueError("cooldown_seconds must be non-negative")
+
+
+@dataclass(slots=True)
+class _ResolvedEvent:
+    event: RiskEvent
+    resolved_utc: datetime
+
+
+class RiskEventManager:
+    """카메라별 작업자-설비 조합의 DB 저장용 위험 이벤트 상태를 관리한다."""
+
+    def __init__(
+        self,
+        policy: EventPolicy | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.policy = policy or EventPolicy()
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._active_events: dict[EventKey, RiskEvent] = {}
+        self._recently_resolved_events: dict[EventKey, _ResolvedEvent] = {}
+
+    def process(
+        self,
+        zone_result: ZoneFrameResult,
+        risk_assessments: list[RiskAssessment],
+    ) -> list[EventTransition]:
+        """한 프레임의 위험 판정을 이벤트 상태 변화로 변환한다."""
+        now_utc = _normalize_utc(self._clock())
+        workers_by_id = {worker.person_id: worker for worker in zone_result.workers}
+        dangerous_keys: set[EventKey] = set()
+        transitions: list[EventTransition] = []
+
+        for assessment in risk_assessments:
+            if assessment.risk_level is RiskLevel.NORMAL:
+                continue
+
+            worker = workers_by_id.get(assessment.person_id)
+            if worker is None:
+                continue
+
+            key = EventKey(
+                camera_id=assessment.camera_id,
+                person_track_id=assessment.person_id,
+                equipment_track_id=assessment.equipment_id,
+            )
+            dangerous_keys.add(key)
+            transition = self._record_danger(
+                key=key,
+                assessment=assessment,
+                person_bottom_center=worker.bottom_center,
+                now_utc=now_utc,
+            )
+            if transition is not None:
+                transitions.append(transition)
+
+        transitions.extend(
+            self._resolve_missing_events(
+                camera_id=zone_result.camera_id,
+                dangerous_keys=dangerous_keys,
+                now_utc=now_utc,
+            )
+        )
+        self._discard_expired_resolved_events(now_utc)
+        return transitions
+
+    def resolve_all(self) -> list[EventTransition]:
+        """프로그램 종료 시 남아 있는 활성 이벤트를 모두 종료한다."""
+        transitions = [
+            EventTransition(EventTransitionType.RESOLVED, event)
+            for event in self._active_events.values()
+        ]
+        self._active_events.clear()
+        self._recently_resolved_events.clear()
+        return transitions
+
+    def _record_danger(
+        self,
+        key: EventKey,
+        assessment: RiskAssessment,
+        person_bottom_center: tuple[float, float],
+        now_utc: datetime,
+    ) -> EventTransition | None:
+        current_event = self._active_events.get(key)
+        if current_event is None:
+            current_event = self._reopen_recent_event(key, now_utc)
+
+        if current_event is None:
+            event = RiskEvent(
+                camera_id=assessment.camera_id,
+                started_utc=now_utc,
+                last_utc=now_utc,
+                source_timestamp_sec=assessment.timestamp,
+                last_source_timestamp_sec=assessment.timestamp,
+                person_track_id=assessment.person_id,
+                person_bottom_center=person_bottom_center,
+                equipment_track_id=assessment.equipment_id,
+                equipment_type=assessment.equipment_type,
+                risk_level=assessment.risk_level,
+            )
+            self._active_events[key] = event
+            return EventTransition(EventTransitionType.CREATED, event)
+
+        escalated = _risk_rank(assessment.risk_level) > _risk_rank(
+            current_event.risk_level
+        )
+        updated_event = replace(
+            current_event,
+            last_utc=now_utc,
+            last_source_timestamp_sec=assessment.timestamp,
+            person_bottom_center=person_bottom_center,
+            risk_level=assessment.risk_level if escalated else current_event.risk_level,
+        )
+        self._active_events[key] = updated_event
+
+        if escalated:
+            return EventTransition(EventTransitionType.ESCALATED, updated_event)
+        return None
+
+    def _reopen_recent_event(
+        self,
+        key: EventKey,
+        now_utc: datetime,
+    ) -> RiskEvent | None:
+        resolved = self._recently_resolved_events.get(key)
+        if resolved is None:
+            return None
+
+        elapsed_seconds = (now_utc - resolved.resolved_utc).total_seconds()
+        if elapsed_seconds > self.policy.cooldown_seconds:
+            del self._recently_resolved_events[key]
+            return None
+
+        del self._recently_resolved_events[key]
+        self._active_events[key] = resolved.event
+        return resolved.event
+
+    def _resolve_missing_events(
+        self,
+        camera_id: str,
+        dangerous_keys: set[EventKey],
+        now_utc: datetime,
+    ) -> list[EventTransition]:
+        transitions: list[EventTransition] = []
+
+        for key, event in list(self._active_events.items()):
+            if key.camera_id != camera_id or key in dangerous_keys:
+                continue
+
+            elapsed_seconds = (now_utc - event.last_utc).total_seconds()
+            if elapsed_seconds < self.policy.resolve_grace_seconds:
+                continue
+
+            del self._active_events[key]
+            self._recently_resolved_events[key] = _ResolvedEvent(
+                event=event,
+                resolved_utc=now_utc,
+            )
+            transitions.append(EventTransition(EventTransitionType.RESOLVED, event))
+
+        return transitions
+
+    def _discard_expired_resolved_events(self, now_utc: datetime) -> None:
+        for key, resolved in list(self._recently_resolved_events.items()):
+            elapsed_seconds = (now_utc - resolved.resolved_utc).total_seconds()
+            if elapsed_seconds > self.policy.cooldown_seconds:
+                del self._recently_resolved_events[key]
+
+
+def create_risk_event_manager_from_system_config(config_path: Path) -> RiskEventManager:
+    """system.yaml의 risk 설정으로 RiskEventManager를 생성한다."""
+    with config_path.open("r", encoding="utf-8") as config_file:
+        try:
+            config = yaml.safe_load(config_file) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"invalid system config: {config_path}") from exc
+
+    risk_config = config.get("risk", {})
+    policy = EventPolicy(
+        resolve_grace_seconds=float(
+            risk_config.get("event_resolve_grace_seconds", 1.0)
+        ),
+        cooldown_seconds=float(risk_config.get("event_cooldown_seconds", 5.0)),
+    )
+    return RiskEventManager(policy=policy)
+
+
 def _resolve_next_level(
     current_level: RiskLevel,
     observed_level: RiskLevel,
     state_started_at: float,
     now: float,
 ) -> tuple[RiskLevel, bool]:
-    """현재 상태와 이번 프레임의 observed_level을 비교해 다음 상태를 결정한다.
-
-    반환값은 (다음 RiskLevel, 변경 여부)다. 하락 시 observed_level이 현재보다
-    여러 단계 낮아도(예: CRITICAL -> NORMAL) 중간 단계를 거치지 않고 observed_level로 바로 반영한다.
-    """
+    """현재 Alert 상태와 이번 프레임 위험도를 비교해 다음 상태를 결정한다."""
     current_priority = _RISK_LEVEL_PRIORITY[current_level]
     observed_priority = _RISK_LEVEL_PRIORITY[observed_level]
 
     if observed_priority > current_priority:
-        # 위험도 상승: hold와 무관하게 항상 즉시 반영한다.
         return observed_level, True
 
     if observed_priority == current_priority:
-        # 동일 위험도 지속: 상태도 시작 시각도 그대로 둔다.
         return current_level, False
 
-    # 위험도 하락: 현재 상태가 최소 hold 시간만큼 유지된 뒤에만 반영한다.
     if now - state_started_at >= ALERT_HOLD_SECONDS:
         return observed_level, True
 
     return current_level, False
+
+
+def _normalize_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise ValueError("event clock must return a timezone-aware datetime")
+    return value.astimezone(timezone.utc)
+
+
+def _risk_rank(risk_level: RiskLevel) -> int:
+    return _RISK_LEVEL_PRIORITY[risk_level]

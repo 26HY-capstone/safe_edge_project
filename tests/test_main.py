@@ -1,19 +1,30 @@
 """main 실행 입력 구성 로직을 검증하는 테스트."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import cast
 
 import numpy as np
 
 from app import main
 from app.alerts.alert_manager import AlertManager
+from app.alerts.event_manager import RiskEventManager
 from app.inference.detector import Detector
 from app.risk.models import RiskAssessment, RiskLevel
 from app.risk.risk_engine import RiskEngine
 from app.risk.risk_logger import RiskLogger
+from app.storage.database import Database
+from app.storage.event_repository import EventRepository
 from app.tracking.tracker import SimpleTracker
 from app.tracking.trajectory import TrajectoryAnalyzer
+from app.video.frame_processor import FrameProcessor
 from app.video.video_source import CameraConfig, FramePacket, VideoSource
-from app.zones.models import EquipmentType, EquipmentZoneInfo, WorkerZoneInfo, ZoneFrameResult
+from app.zones.models import (
+    EquipmentType,
+    EquipmentZoneInfo,
+    WorkerZoneInfo,
+    ZoneFrameResult,
+)
 from app.zones.zone_manager import ZoneManager
 
 
@@ -49,6 +60,11 @@ class _FakeProcessor:
 
     def process_next(self) -> _FakeProcessedFrame | None:
         return self.processed_frame
+
+
+def _processor(processed_frame: _FakeProcessedFrame | None) -> FrameProcessor:
+    """테스트용 process_next 더블을 FrameProcessor 역할로 사용한다."""
+    return cast(FrameProcessor, _FakeProcessor(processed_frame))
 
 
 def _frame_packet() -> FramePacket:
@@ -276,7 +292,7 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
     rendered_frame = np.full((100, 100, 3), 255, dtype=np.uint8)
     camera_view = main.CameraViewState(
         video_source=VideoSource(source=0, camera_id="camera-0"),
-        processor=_FakeProcessor(
+        processor=_processor(
             _FakeProcessedFrame(
                 frame_packet=_frame_packet(),
                 rendered_frame=rendered_frame,
@@ -298,7 +314,7 @@ def test_read_display_frame_uses_processor_rendered_frame() -> None:
 def test_read_display_frame_result_alert_update_is_none_when_camera_off() -> None:
     camera_view = main.CameraViewState(
         video_source=VideoSource(source=0, camera_id="camera-0"),
-        processor=_FakeProcessor(None),
+        processor=_processor(None),
         enabled=False,
     )
 
@@ -345,7 +361,7 @@ def test_read_display_frame_passes_alert_manager_result_to_renderer(
 
     camera_view = main.CameraViewState(
         video_source=VideoSource(source=0, camera_id="cam_01"),
-        processor=_FakeProcessor(
+        processor=_processor(
             _FakeProcessedFrame(
                 frame_packet=_frame_packet(),
                 rendered_frame=np.zeros((100, 100, 3), dtype=np.uint8),
@@ -369,7 +385,7 @@ def test_read_display_frame_does_not_call_renderer_when_camera_off(
 
     camera_view = main.CameraViewState(
         video_source=VideoSource(source=0, camera_id="cam_01"),
-        processor=_FakeProcessor(None),
+        processor=_processor(None),
         enabled=False,
     )
 
@@ -386,7 +402,7 @@ def test_read_display_frame_does_not_call_renderer_when_no_processed_frame(
 
     camera_view = main.CameraViewState(
         video_source=VideoSource(source=0, camera_id="cam_01"),
-        processor=_FakeProcessor(None),
+        processor=_processor(None),
         enabled=True,
     )
 
@@ -427,7 +443,7 @@ def test_read_display_frame_updates_independent_alert_state_per_camera(
     def _view_with_risk(camera_id: str, risk_level: RiskLevel) -> main.CameraViewState:
         return main.CameraViewState(
             video_source=VideoSource(source=0, camera_id=camera_id),
-            processor=_FakeProcessor(
+            processor=_processor(
                 _FakeProcessedFrame(
                     frame_packet=_frame_packet(),
                     rendered_frame=np.zeros((100, 100, 3), dtype=np.uint8),
@@ -463,3 +479,72 @@ def test_read_display_frame_updates_independent_alert_state_per_camera(
 
     assert received_updates["cam_01"].current_level == RiskLevel.WARNING
     assert received_updates["cam_03"].current_level == RiskLevel.CRITICAL
+
+
+def test_read_display_frame_persists_created_event(tmp_path) -> None:
+    zone_result = ZoneFrameResult(
+        timestamp=10.0,
+        frame_index=100,
+        camera_id="camera-0",
+        workers=[
+            WorkerZoneInfo(
+                person_id=11,
+                person_bbox=(100.0, 100.0, 140.0, 300.0),
+                bottom_center=(120.0, 300.0),
+            )
+        ],
+        equipments=[
+            EquipmentZoneInfo(
+                equipment_id=22,
+                equipment_type=EquipmentType.FORKLIFT,
+                equipment_bbox=(200.0, 180.0, 400.0, 360.0),
+                warning_zone=(160.0, 140.0, 440.0, 400.0),
+                critical_zone=(200.0, 180.0, 400.0, 360.0),
+                is_active=True,
+            )
+        ],
+    )
+    assessment = RiskAssessment(
+        timestamp=10.0,
+        frame_index=100,
+        camera_id="camera-0",
+        person_id=11,
+        equipment_id=22,
+        equipment_type=EquipmentType.FORKLIFT,
+        risk_level=RiskLevel.WARNING,
+    )
+    camera_view = main.CameraViewState(
+        video_source=VideoSource(source=0, camera_id="camera-0"),
+        processor=_processor(
+            _FakeProcessedFrame(
+                frame_packet=_frame_packet(),
+                rendered_frame=np.zeros((100, 100, 3), dtype=np.uint8),
+                zone_result=zone_result,
+                risk_assessments=[assessment],
+            )
+        ),
+        enabled=True,
+    )
+    database = Database(tmp_path / "events.db")
+    database.initialize()
+    repository = EventRepository(database)
+    event_components = main.EventComponents(
+        risk_event_manager=RiskEventManager(
+            clock=lambda: datetime(2026, 10, 3, tzinfo=timezone.utc)
+        ),
+        alert_manager=AlertManager(),
+        event_repository=repository,
+        database=database,
+    )
+
+    main._read_display_frame(
+        camera_view,
+        event_components=event_components,
+    )
+    records = repository.list_events()
+    database.dispose()
+
+    assert len(records) == 1
+    assert records[0].camera_id == "camera-0"
+    assert records[0].person_track_id == 11
+    assert records[0].equipment_track_id == 22

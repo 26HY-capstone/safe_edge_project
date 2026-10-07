@@ -2,11 +2,12 @@
 
 from dataclasses import dataclass, field
 import time
+from typing import Protocol
 
 import cv2
 import numpy as np
 
-from app.video.video_source import VideoSource, FramePacket
+from app.video.video_source import FramePacket
 from app.inference.detector import BBox, Detector, Detection
 from app.tracking.tracker import Tracker, TrackedObject
 from app.tracking.trajectory import MotionSummary, TrajectoryAnalyzer
@@ -22,6 +23,14 @@ from app.zones.zone_manager import ZoneManager
 _ZONE_THICKNESS = 2
 _CRITICAL_ZONE_COLOR = (0, 0, 255)
 _WARNING_ZONE_COLOR = (0, 255, 255)
+
+
+class FrameSource(Protocol):
+    """FrameProcessor가 영상 입력 객체에 기대하는 최소 인터페이스."""
+
+    def read(self) -> FramePacket | None:
+        """다음 프레임 패킷을 반환하고, 더 이상 읽을 프레임이 없으면 None을 반환한다."""
+        ...
 
 
 @dataclass
@@ -47,7 +56,7 @@ class ProcessedFrame:
 class FrameProcessor:
     def __init__(
         self,
-        video_source: VideoSource,
+        video_source: FrameSource,
         detector: Detector,
         zone_manager: ZoneManager,
         risk_engine: RiskEngine,

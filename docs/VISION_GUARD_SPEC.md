@@ -417,6 +417,11 @@ THEN Risk = WARNING / CRITICAL
 
 Risk Event 발생 시 Alert Manager를 호출한다.
 
+프로토타입 시연에서는 터미널 로그만 사용한다. 최초 `WARNING`/`CRITICAL`
+발생과 `WARNING → CRITICAL` 격상 시에만 출력하며, 동일 위험이 유지되는
+매 프레임에는 반복 출력하지 않는다. 화면 경고, 객체 강조, 경고 문구와
+경고음은 시연 이후 확장 범위로 둔다.
+
 지원 기능:
 
 - 화면 Warning
@@ -436,26 +441,32 @@ Forklift #3 접근 위험
 
 ## 16. 위험 이벤트 로그
 
-Risk Event 발생 시 DB에 기록한다.
+프로토타입은 SQLite의 `risk_events` 테이블에 하나의 위험 상황을 한 행으로
+기록한다. 별도 UUID `event_id`는 사용하지 않고 DB 자동 증가 `id`를 식별자로
+사용한다.
 
-최소 저장 정보:
+저장 필드:
 
-- event_id
-- timestamp
-- camera_id
-- worker_track_id
-- equipment_track_id
-- equipment_type
-- equipment_state
-- risk_type
-- risk_level
-- distance
-- zone_id
-- PPE 상태
-- snapshot_path
-- video_clip_path
+- `id`
+- `camera_id`
+- `started_utc`, `last_utc`
+- `source_timestamp_sec`, `last_source_timestamp_sec`
+- `person_track_id`
+- `person_bottom_center_x`, `person_bottom_center_y`
+- `equipment_track_id`
+- `equipment_type`
+- `risk_level`
 
-개발 초기에는 SQLite 사용을 권장한다.
+동일 상황은 실행 중 `(camera_id, person_track_id, equipment_track_id)` 조합으로
+판별한다. 최초 `WARNING` 또는 `CRITICAL`에만 INSERT하고, 동일 위험이 지속되는
+프레임은 메모리의 마지막 관찰 정보만 갱신한다. `WARNING → CRITICAL` 격상 시에는
+같은 행의 최고 위험등급과 마지막 관찰 정보를 UPDATE한다. 위험등급이 하락해도
+기록된 최고 위험등급은 내리지 않는다.
+
+마지막 위험 탐지 후 1초 동안 위험이 재발하지 않으면 종료하고 `last_utc`와
+`last_source_timestamp_sec`를 최종 UPDATE한다. 종료 후 5초 이내 동일 조합이
+재진입하면 같은 이벤트로 처리하고, 5초 이후 재진입하면 새 행을 만든다.
+DB 장애는 영상 추론 루프를 중단시키지 않고 오류 로그만 남긴다.
 
 ## 17. 위험 상황 Snapshot
 

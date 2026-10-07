@@ -20,10 +20,16 @@ tracking:
   max_lost_frames: 30
 
 risk:
+  # 마지막 위험 탐지 후 이 시간 동안 재탐지되지 않으면 이벤트를 종료한다.
+  event_resolve_grace_seconds: 1
   # 같은 위험 상황이 반복 저장되지 않도록 cooldown을 둔다.
   event_cooldown_seconds: 5
   warning_distance_px: 150
   critical_distance_px: 80
+
+diagnostics:
+  # 모델·Risk 검증이 필요할 때만 매 프레임 JSONL 기록을 활성화한다.
+  frame_risk_log_enabled: false
 
 performance:
   target_fps: 10
