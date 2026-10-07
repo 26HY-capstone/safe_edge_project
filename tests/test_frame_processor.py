@@ -293,3 +293,44 @@ def test_frame_processor_renders_without_zone_colors_when_no_equipment() -> None
     assert rendered_frame is not None
     assert not np.any(np.all(rendered_frame == _CRITICAL_ZONE_COLOR, axis=-1))
     assert not np.any(np.all(rendered_frame == _WARNING_ZONE_COLOR, axis=-1))
+
+
+class _PPEDetector(_StaticDetector):
+    def __init__(self):
+        self.calls = 0
+
+    def detect(self, frame):
+        self.calls += 1
+        detections = super().detect(frame)
+        if self.calls == 1:
+            # tracker threshold보다 낮아도 원본 Detection에서 PPE를 연결한다.
+            detections.append(Detection(3, "helmet", 0.3, (20, 10, 30, 20)))
+        return detections
+
+
+def test_frame_processor_matches_raw_ppe_and_clears_next_frame():
+    detector = _PPEDetector()
+    processor = FrameProcessor(
+        video_source=_FrameSource(), detector=detector, tracker=SimpleTracker(),
+        zone_manager=ZoneManager(), risk_engine=RiskEngine(),
+        draw_bbox=False, draw_metrics=False,
+    )
+    first = processor.process_next()
+    second = processor.process_next()
+    assert first.ppe_statuses[1].items[0].is_worn
+    assert first.ppe_statuses[1].items[0].detections[0] is first.detections[1]
+    assert not second.ppe_statuses[1].items[0].is_worn
+    assert len(first.tracked_objects) == 1
+    assert len(first.zone_result.workers) == 1
+    assert first.risk_assessments == second.risk_assessments == []
+    assert detector.calls == 2
+    assert processor.process_next() is None
+
+
+def test_frame_processor_without_tracker_has_no_ppe_statuses():
+    processor = FrameProcessor(
+        video_source=_FrameSource(), detector=_PPEDetector(),
+        zone_manager=ZoneManager(), risk_engine=RiskEngine(),
+        draw_bbox=False, draw_metrics=False,
+    )
+    assert processor.process_next().ppe_statuses == {}

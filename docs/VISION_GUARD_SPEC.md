@@ -125,6 +125,59 @@ PyTorch `.pt` 모델과 TensorRT `.engine` 모델을 동일 인터페이스에�
 
 작업자의 PPE 착용 여부를 판단한다.
 
+### 통합 모델 기반 1차 공간 매칭 (2026-10-06)
+
+현재 시연에서는 전체 프레임 통합 ONNX 모델의 Detection과 Tracking 결과를
+`app/ppe/matcher.py`의 `PPEMatcher.match()`에 전달한다. 아래 ROI 재추론 흐름은
+향후 고도화 대상이며 현재 매칭에는 추가 모델 실행, Crop 또는 I/O가 없다.
+
+- `class_name`으로 person과 helmet/gloves/safety_vest/harness_body를 구분한다.
+  모델 ID는 `config/model.yaml`의 매핑을 따르며 head/body는 착용 장비가 아니다.
+- PPE의 기존 `Detection.center`가 person bbox 내부 또는 경계에 있으면 후보이다.
+  후보가 여럿이면 기존 `TrackedObject.center`까지의 x/y 거리를 person 폭/높이로
+  각각 나눈 제곱합이 가장 작은 작업자를 선택한다. 동률이면 작은 track_id가 우선이다.
+- 각 PPE detection은 최대 한 작업자에게만 연결한다. 작업자에게 같은 종류의
+  장비가 여러 개 연결될 수 있으며 gloves는 하나 이상 매칭되면 착용 후보로 표시한다.
+  양손 착용 검증 및 detector의 중복 bbox 제거는 이 기능의 범위 밖이다.
+- `FrameProcessor`가 Tracking 후 매 프레임 호출하며 `ProcessedFrame.ppe_statuses`에
+  `dict[int, WorkerPPEStatus]`를 반환한다. 각 결과의 `items`에는 종류별
+  `PPEStatus(class_name, detections)`와 `is_worn` 속성이 있다.
+  camera/timestamp/frame_index는 같은 ProcessedFrame의 frame_packet을 사용한다.
+- person이 없으면 빈 dict, PPE가 없으면 모든 항목의 is_worn=False이다.
+  상태를 프레임 간 보존하지 않으므로 카메라 간 track ID 충돌이나 이전 착용 상태 잔류가 없다.
+- False는 해당 프레임에서 PPE가 연결되지 않은 미착용 후보이며 실제 미착용 확정이 아니다.
+  가림, bbox 밖으로 나온 장갑, 누락 탐지 및 겹친 작업자의 소유자 모호성은 남는다.
+  Risk 계층에서 아래 시간 누적을 적용해 경고를 생성한다. 실영상으로 오탐·누락률을 검증해야 한다.
+- 계산 비용은 PPE 수 × person 수이며 GPU와 새 의존성이 필요 없다.
+  키포인트나 부위별 위치 제한은 카메라 시점별 검증 후 추가한다.
+
+### PPE 미착용 표시와 경고
+
+- `app/risk/ppe_risk.py`의 `PPERiskEvaluator`가 카메라·track ID·장비별 연속
+  누락을 누적한다. 단조 시계를 주입할 수 있으며 영상 재생 시간과 독립적이다.
+- `config/system.yaml`의 `ppe_risk`로 필수 장비와 시간을 설정한다.
+  기본 필수 장비는 helmet/gloves/safety_vest이고 harness_body는 현장 요구 시 추가한다.
+  `missing_seconds: 1.0` 이상 누락이면 WARNING, 그 전에는 CHECK이다.
+  `max_observation_gap_seconds: 2.0`보다 긴 분석 공백, 영상 frame_index 역행/반복,
+  작업자 소실 시 누적을 초기화한다. 착용 재탐지 시 해당 장비의 누적을 즉시 해제한다.
+- `ProcessedFrame.ppe_risk_assessments`는 설비 위험과 별도의 `PPERiskAssessment`
+  목록이다. camera_id, person_id, timestamp, frame_index, required_classes,
+  missing_classes, pending_classes, risk_level을 포함한다. 기존 설비 로그 형식은 유지하며
+  PPE 결과는 현재 화면·경고용이고 별도 영속 로그에는 기록하지 않는다.
+- main은 카메라 타일 축소 후 person bbox 옆에 `Person #ID PPE`, 장비별
+  `OK`(매칭됨), `CHECK`(누락 확인 중), `MISSING`(누락 지속)을 표시한다.
+  OpenCV 기본 글꼴의 한글 미지원으로 화면은 영문 표기를 사용한다.
+- 확정 누락 시 해당 작업자의 bbox와 문구를 노란색으로 강조하고 PPE WARNING을
+  표시한다. 설비 위험과 PPE 위험을 기존 AlertManager에 함께 전달하므로
+  WARNING 배지/점멸 테두리/경고음이 동작하며 CRITICAL이 항상 우선한다.
+  장비가 다시 연결돼도 카메라 경고는 기존 EventManager의 최소 3초 hold를 따른다.
+- 기존 경고음 구현은 macOS `afplay`와 data/sounds의 WAV를 사용한다.
+  Linux/Jetson 음성 재생은 별도 backend가 필요하며 화면 경고는 독립적으로 동작한다.
+- 자동 테스트는 실제 모델, 카메라, 음성 장치 없이 연속 누락·회복·카메라 격리·
+  재시작·설비 위험 우선순위·화면과 소리 전달을 검증한다. 실제 ONNX/영상 현장 검증은 별도이다.
+
+### 향후 ROI 기반 탐지
+
 ```text
 Person Detection
 → Worker ROI Crop

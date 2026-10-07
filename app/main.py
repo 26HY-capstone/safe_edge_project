@@ -16,9 +16,12 @@ from app.alerts.event_manager import (
     RiskEventManager,
     create_risk_event_manager_from_system_config,
 )
+from app.alerts.ppe_renderer import draw_ppe_overlay
+from app.alerts.models import CameraAlertUpdate
 from app.alerts.models import CameraAlertUpdate, EventTransition, EventTransitionType
 from app.inference.detector import Detector
 from app.inference.model_manager import create_detector_from_model_config
+from app.risk.ppe_risk import PPERiskEvaluator, load_ppe_risk_config
 from app.risk.risk_engine import RiskEngine
 from app.risk.risk_logger import RiskLogger, is_frame_risk_log_enabled
 from app.storage.database import Database, create_database_from_system_config
@@ -323,6 +326,7 @@ def _create_frame_processor(
         trajectory_analyzer=trajectory_analyzer,
         zone_manager=processing_components.zone_manager,
         risk_engine=processing_components.risk_engine,
+        ppe_risk_evaluator=PPERiskEvaluator(load_ppe_risk_config(SYSTEM_CONFIG_PATH)),
         draw_bbox=True,
         draw_metrics=True,
     )
@@ -465,9 +469,14 @@ def _read_display_frame(
         # Alert UI: 분석이 실제로 성공한 경우(이 분기)에만 camera의 Alert 상태를
         # 갱신하고 renderer에게 그리기를 맡긴다. camera OFF나 처리 실패 시에는 이
         # 분기에 들어오지 않으므로 Alert UI도 자연히 표시되지 않는다.
+        draw_ppe_overlay(
+            frame=frame, tracked_objects=processed_frame.tracked_objects,
+            assessments=processed_frame.ppe_risk_assessments,
+            source_size=(processed_frame.frame_packet.width, processed_frame.frame_packet.height),
+        )
         camera_alert_update = alert_manager.update_camera(
             camera_id=video_source.camera_id,
-            risk_assessments=processed_frame.risk_assessments,
+            risk_assessments=[*processed_frame.risk_assessments, *processed_frame.ppe_risk_assessments],
         )
         draw_alert_overlay(frame=frame, camera_alert_update=camera_alert_update, now=now)
 
