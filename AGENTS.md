@@ -46,10 +46,10 @@ CCTV / RTSP / Video
   - 불변 `FramePacket`, `CameraConfig`, YAML 설정 로드
   - open/read/reset/close, context manager 및 반복 재생
 - `app/video/frame_processor.py`
-  - Detection → Tracking → Trajectory 호출
+  - Detection → Tracking → Trajectory → Zone → Risk 호출
   - Detection/Tracking bbox와 FPS/latency 렌더링
   - 원본 `FramePacket`을 변경하지 않고 `rendered_frame`을 별도 반환
-  - 아직 Zone → Risk → Event → Alert 호출은 연결하지 않음
+  - `ZoneFrameResult`와 `RiskAssessment`를 실행 계층에 반환
 - `app/tracking/tracker.py`, `app/tracking/trajectory.py`
   - 공통 `Tracker` 계약, 단순 추적기와 ByteTrack adapter
   - `TrackedObject`, Track History, 이동거리, 방향 및 pixel 속도 계산
@@ -61,42 +61,42 @@ CCTV / RTSP / Video
   - `NORMAL/WARNING/CRITICAL` 위험등급
   - 작업자 bottom-center와 설비 bbox Zone, `is_active`를 조합한 순수 규칙
   - 모든 작업자-설비 조합에 대한 `RiskAssessment` 생성
+- `app/main.py`
+  - ONNX Detector, 카메라별 Tracker/Trajectory, ZoneManager와 RiskEngine 조립
+  - 최대 4개 입력 표시, 자원 해제, Event/Alert/DB 전환 연결
+- `app/alerts/`, `app/storage/`
+  - 최초 위험, 등급 격상, 종료와 1초 종료 유예 및 5초 cooldown 관리
+  - 동일 위험 프레임의 중복 저장 억제와 로그 기반 Alert
+  - SQLite `risk_events` 생성·격상·종료 저장
 - 설정과 테스트
   - `requirements.txt`와 `config/*.yaml`의 기본 골격 작성
-  - `test_video_source.py`, `test_frame_processor.py`, `test_tracking.py`, `test_trajectory.py`, `test_zones.py`, `test_risk.py`
-  - 2026-09-22 기준 `pytest`: 36 passed, `python -m compileall -q app`: 통과
+  - EventManager와 EventRepository 단위 테스트 및 main 연결 테스트 포함
 
 ### 모델 아티팩트 상태
 
-- 실제 모델 파일은 Git LFS로 추적한다.
-- `models/1model_20260909.pt`: 작업자와 산업 설비 탐지용 모델
-  - class: `person`, `forklift`, `robot_arm`, `conveyor`
-- `models/2model_20260921.pt`: PPE 탐지용 모델
-  - class: `head`, `gloves`, `helmet`, `body`, `safety_vest`, `harness_body`
-- `models/1model.best.onnx`, `models/2model.best.onnx`: ONNX Runtime 및 TensorRT 변환 입력용 FP32 모델
-- `models/1model.best.engine`, `models/2model.best.engine`: 개발 PC에서 생성한 TensorRT engine
-- TensorRT engine은 GPU, CUDA, TensorRT 버전에 종속되므로 Jetson 배포 장치에서 다시 빌드한다.
-- `models/best.pt`는 0 byte placeholder이며 실행 모델로 사용하지 않는다.
+- 프로토타입은 `config/model.yaml`에서 10개 클래스 통합 ONNX 모델을 사용한다.
+- 로컬 실행 파일은 `models/model.onnx`이며 Git에는 커밋하지 않는다.
+- class 순서는 `person`, `head`, `gloves`, `helmet`, `body`, `safety_vest`,
+  `forklift`, `robot_arm`, `conveyor`, `harness_body`다.
+- TensorRT engine은 GPU, CUDA, TensorRT 버전에 종속되므로 Jetson에서 다시 빌드한다.
 
 ### 아직 구현 또는 통합되지 않음
 
-- `app/inference/pytorch_backend.py`, `tensorrt_backend.py`, `model_manager.py`는 docstring만 있는 상태다.
-- `app/main.py`는 docstring만 있어 실제 영상 End-to-End 실행 진입점이 없다.
-- `FrameProcessor`와 `ZoneManager`, `RiskEngine`, Event/Alert는 아직 하나의 실행 파이프라인으로 연결되지 않았다.
+- `app/inference/tensorrt_backend.py`는 실행 가능한 구현이 아니다.
 - `app/equipment/` 상태 분석 모듈은 아직 없고 `EquipmentZoneInfo.is_active: bool`을 임시 계약으로 사용한다.
 - `config/zones.yaml`의 Static Polygon은 현재 `ZoneManager` 런타임에 로드되지 않는다.
-- `app/alerts/`, `app/storage/`, `app/api/`, `app/video/rtsp_source.py`, Frontend는 실행 가능한 구현이 아니다.
-- Event deduplication/cooldown, DB, Snapshot, Event Clip 및 보고서는 구현되지 않았다.
+- `app/api/`, `app/video/rtsp_source.py`, Frontend는 실행 가능한 구현이 아니다.
+- Snapshot, Event Clip 및 보고서는 구현되지 않았다.
 - 빈 파일이나 placeholder가 존재한다는 이유만으로 기능이 구현됐다고 판단하지 않는다.
 
 ### 현재 차단 요소와 기술 부채
 
-- `config/model.yaml`은 아직 0 byte `models/best.pt`를 가리키며 두 모델의 서로 다른 class ID를 하나의 mapping으로 합쳐 놓았다.
-- 실행 전에 산업설비 모델과 PPE 모델의 설정을 분리하고 실제 파일 경로 및 class mapping을 각각 일치시켜야 한다.
+- `models/model.onnx`는 Git에 포함되지 않는 로컬 실행 파일이므로 시연 장치마다 별도로 준비해야 한다.
+- 현재 확보된 샘플 영상은 작업자와 설비의 실제 WARNING/CRITICAL 상황을 안정적으로 재현하지 못해 End-to-End 이벤트 시연 검증이 남아 있다.
 - 설비 상태 모듈이 없기 때문에 현재 Zone 생성 함수는 `DEFAULT_IS_ACTIVE = True`를 사용한다. 이는 보수적인 프로토타입 임시값이며 실제 상태 판정으로 교체해야 한다.
 - 설비 상태는 최종적으로 Boolean 대신 `MOVING/STOPPED/UNKNOWN` 또는 `RUNNING/STOPPED/UNKNOWN` Enum과 Temporal Smoothing을 사용한다.
-- bbox 기반 Zone과 Risk 단위 테스트는 통과하지만 실제 모델·실제 영상 기반 FPS, latency 및 경고 시나리오는 아직 검증하지 않았다.
-- `origin/feat/tracking-tuning`의 PyTorch backend와 실행 조립 코드는 `main`에 병합되지 않았으므로 검토·정리 없이 복사하거나 완료 상태로 기록하지 않는다.
+- bbox 기반 Zone, Risk와 Event/DB 단위 테스트는 통과하지만 실제 위험 영상 기반 FPS, 평균/P95 latency 및 DB 이벤트 결과는 아직 검증하지 않았다.
+- SQLite 이벤트는 정상 종료 시 마지막 관찰 시각을 flush하지만, 프로세스 강제 종료나 전원 차단 직전의 메모리상 마지막 관찰 정보는 유실될 수 있다.
 
 
 ## 4. 반드시 지켜야 하는 아키텍처 규칙
@@ -290,61 +290,65 @@ equipment_type
 risk_level
 ```
 
-`RiskEvent`는 아직 정의되지 않았다. Event 구현 시 `RiskAssessment`와 생명주기 상태, deduplication key, 발생·갱신·해제 시각을 분리하여 정의한다.
+### `RiskEvent`
+
+정의 위치: `app/alerts/models.py`
+
+```text
+camera_id
+started_utc
+last_utc
+source_timestamp_sec
+last_source_timestamp_sec
+person_track_id
+person_bottom_center
+equipment_track_id
+equipment_type
+risk_level  # 이벤트가 도달한 최고 등급
+```
+
+DB 자동 증가 `id`는 `app/storage/models.py`의 ORM 객체에서만 관리한다.
+동일 이벤트의 메모리 키는 `(camera_id, person_track_id, equipment_track_id)`이며,
+DB 갱신 시에는 `started_utc`를 함께 사용한다.
 
 ORM 객체를 Detection, Tracking 또는 Risk 계층의 데이터 계약으로 사용하지 않는다.
 
 ## 7. `main` 기준 다음 개발 순서
 
-현재 완료된 Detection 계약, 영상 입력, Tracking, Trajectory, bbox Zone, Risk 단위 로직을 기반으로 아래 순서대로 진행한다. 각 단계의 완료 조건을 만족한 후 다음 단계로 이동한다.
+현재 10클래스 ONNX Detection, 영상 입력, Tracking, Trajectory, bbox Zone,
+Risk, 중복 없는 터미널 Alert와 SQLite Event Log까지 연결됐다. 다음 순서로 진행한다.
 
-1. **모델 설정 분리**
-   - `config/model.yaml`을 산업설비 모델과 PPE 모델 설정으로 분리
-   - `1model_20260909.pt`, `2model_20260921.pt`의 class ID와 실제 label 순서를 각각 기록
-   - 0 byte `models/best.pt` 의존 제거
-2. **PyTorch YOLO backend**
-   - `app/inference/pytorch_backend.py`에서 `1model_20260909.pt` 로딩·추론·`Detection` 변환
-   - `app/inference/model_manager.py`에서 설정 검증, backend 선택 및 warm-up
-   - 실제 프레임에서 원본 픽셀 bbox와 confidence 검증
-3. **실행 진입점**
-   - `app/main.py`에서 CameraConfig, VideoSource, Detector, Tracker, Trajectory를 조립
-   - 종료 signal, VideoCapture와 창 자원 해제
-4. **Zone과 Risk 파이프라인 연결**
-   - `app/video/frame_processor.py`에 `ZoneManager`와 `RiskEngine` 호출 추가
-   - 반환 객체에 `ZoneFrameResult`와 `RiskAssessment`를 명시적으로 포함
-5. **프로토타입 터미널 경고**
-   - `app/alerts/alert_manager.py`에 WARNING/CRITICAL 로그 출력 구현
-   - 같은 객체 조합의 매 프레임 중복 출력은 최소한의 상태 추적으로 억제
-6. **첫 End-to-End 시현 검증**
+1. **첫 End-to-End 시현 검증**
    - 로컬 영상 또는 Webcam → Detection → Tracking → Zone → Risk → 터미널 Alert
-   - 작업자 진입 시 WARNING/CRITICAL, 이탈 시 정상 복귀 확인
+   - 작업자 진입 시 WARNING/CRITICAL 및 SQLite INSERT/UPDATE 확인
+   - 동일 위험의 중복 행 억제와 1초 종료·5초 cooldown 확인
    - FPS, 평균 latency와 P95 latency 기록
-7. **설비 상태 계약 정상화**
+2. **시연용 입력과 설정 확정**
+   - 위험상황이 재현되는 영상과 카메라 슬롯을 고정
+   - `config/cameras.yaml`, model 경로와 실행 명령 검증
+3. **설비 상태 계약 정상화**
    - `app/equipment/forklift_state.py`와 공통 `EquipmentStateResult` 생성
    - `is_active: bool`을 `MOVING/STOPPED/UNKNOWN`으로 교체
    - jitter, hysteresis와 Temporal Smoothing 테스트
-8. **Static Polygon Zone**
+4. **Static Polygon Zone**
    - `config/zones.yaml` 로더와 카메라별 필터링 구현
    - bbox Zone과 관리자 Polygon의 우선순위·결합 규칙 명시
-9. **Event 생명주기**
-   - `app/alerts/event_manager.py`에 ACTIVE/RESOLVED, deduplication, cooldown 및 등급 상승 구현
-10. **저장과 증적**
-    - `app/storage/models.py`, `database.py`, `event_repository.py`
+5. **Snapshot과 Event Clip**
     - `app/storage/media_repository.py`, `app/video/ring_buffer.py`로 Snapshot/Event Clip 생성
-11. **로봇팔 상태 확장**
+6. **로봇팔 상태 확장**
     - `app/equipment/robot_state.py`에서 Robot ROI Motion 기반 `RUNNING/STOPPED/UNKNOWN`
     - bbox + margin 초기 Zone에서 Static Polygon 중기, 상태 기반 Dynamic Zone 고도화 순으로 진행
-12. **컨베이어 상태 확장**
+7. **컨베이어 상태 확장**
     - `app/equipment/conveyor_state.py`에서 ROI Optical Flow와 방향 일관성 분석
-13. **PPE Trigger 추론**
+8. **PPE Trigger 추론**
     - 작업자가 위험 Zone에 접근할 때만 `2model_20260921.pt` 실행
     - 산업설비 모델과 PPE 모델의 class space 및 결과 계약을 분리
-14. **API와 Frontend**
+9. **API와 Frontend**
     - FastAPI, WebSocket, Zone CRUD, 이벤트 조회 및 시스템 상태
-15. **TensorRT와 Jetson 배포**
+10. **TensorRT와 Jetson 배포**
     - ONNX 결과 일치 검증 후 Jetson에서 FP16 engine 재생성
     - PyTorch/ONNX/TensorRT 정확도, FPS, latency, RAM/VRAM과 전력 비교
-16. **후속 고도화**
+11. **후속 고도화**
     - TTC, 미래경로 Dynamic Zone, Near-Miss, Pose, Fall, Adaptive Inference, Heatmap 및 Risk Report
 
 ## 8. Edge 실행 정책

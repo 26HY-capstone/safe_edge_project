@@ -1,20 +1,68 @@
-"""Alert 계층에서 사용하는 camera 단위 상태 데이터 모델."""
+"""Alert 계층에서 사용하는 이벤트와 camera 단위 상태 데이터 계약."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 
+from app.inference.detector import Point
 from app.risk.models import RiskLevel
+from app.zones.models import EquipmentType
+
+
+@dataclass(frozen=True, slots=True)
+class EventKey:
+    """실행 중 동일한 작업자-설비 위험 조합을 식별한다."""
+
+    camera_id: str
+    person_track_id: int
+    equipment_track_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class RiskEvent:
+    """DB 저장 계층과 공유하는 위험 이벤트 스냅샷."""
+
+    camera_id: str
+    started_utc: datetime
+    last_utc: datetime
+    source_timestamp_sec: float
+    last_source_timestamp_sec: float
+    person_track_id: int
+    person_bottom_center: Point
+    equipment_track_id: int
+    equipment_type: EquipmentType
+    risk_level: RiskLevel
+
+    @property
+    def key(self) -> EventKey:
+        return EventKey(
+            camera_id=self.camera_id,
+            person_track_id=self.person_track_id,
+            equipment_track_id=self.equipment_track_id,
+        )
+
+
+class EventTransitionType(Enum):
+    """DB 쓰기나 사용자 로그가 필요한 이벤트 상태 변화."""
+
+    CREATED = "created"
+    ESCALATED = "escalated"
+    RESOLVED = "resolved"
+
+
+@dataclass(frozen=True, slots=True)
+class EventTransition:
+    """위험 이벤트 생명주기에서 외부 계층에 전달하는 상태 변화."""
+
+    transition_type: EventTransitionType
+    event: RiskEvent
 
 
 @dataclass(slots=True)
 class CameraAlertState:
-    """EventManager가 camera_id별로 유지하는 현재 Alert 상태.
-
-    risk_level: hold 정책이 반영된, 그 카메라의 현재 대표 위험등급.
-    state_started_at: risk_level이 지금 값으로 바뀐 시각(time.monotonic 기준).
-                       hold 시간이 지났는지 판단하는 기준점으로 쓰인다.
-    """
+    """카메라별 화면/소리 Alert 상태."""
 
     camera_id: str
     risk_level: RiskLevel
@@ -23,14 +71,7 @@ class CameraAlertState:
 
 @dataclass(frozen=True, slots=True)
 class CameraAlertUpdate:
-    """EventManager.update() 한 번의 호출 결과.
-
-    UI/Sound 계층은 이 객체의 changed와 current_level만으로
-    "지금 바로 반응해야 하는 변화인지"를 판단할 수 있다.
-    state_started_at은 UI가 camera별로 독립적인 blink phase를 계산할 때
-    쓴다 — EventManager 내부의 private 상태(_states)에 UI가 직접 접근하지
-    않아도 되도록, 필요한 시각 정보를 이 DTO에 그대로 담아 내보낸다.
-    """
+    """카메라별 Alert 상태 갱신 결과."""
 
     camera_id: str
     previous_level: RiskLevel

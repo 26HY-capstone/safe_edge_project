@@ -1,8 +1,8 @@
 """Zone 모듈의 공간 계산과 출력 데이터 생성을 검증하는 테스트."""
 
-from types import SimpleNamespace
-
 import pytest
+import numpy as np
+from app.video.video_source import FramePacket
 
 from app.tracking.tracker import TrackedObject
 from app.zones.conveyor import create_conveyor_zone_info
@@ -46,15 +46,12 @@ def make_tracked_object(
     )
 
 
-
 def test_scale_bbox():
     bbox = (100.0, 100.0, 300.0, 300.0)
 
     result = scale_bbox(bbox, 1.2)
 
-    assert result == pytest.approx(
-        (80.0, 80.0, 320.0, 320.0)
-    )
+    assert result == pytest.approx((80.0, 80.0, 320.0, 320.0))
 
 
 def test_is_point_in_bbox_inside():
@@ -82,9 +79,7 @@ def test_create_worker_zone_info():
         bbox=(100.0, 100.0, 200.0, 500.0),
     )
 
-    worker = create_worker_zone_info(
-        tracked_object
-    )
+    worker = create_worker_zone_info(tracked_object)
 
     assert worker.person_id == 7
     assert worker.person_bbox == (
@@ -106,9 +101,7 @@ def test_create_worker_zone_infos_filters_non_person():
         make_tracked_object(3, "person"),
     ]
 
-    workers = create_worker_zone_infos(
-        tracked_objects
-    )
+    workers = create_worker_zone_infos(tracked_objects)
 
     assert len(workers) == 2
     assert workers[0].person_id == 1
@@ -121,9 +114,7 @@ def test_create_conveyor_zone_info():
         class_name="conveyor",
     )
 
-    result = create_conveyor_zone_info(
-        tracked_object
-    )
+    result = create_conveyor_zone_info(tracked_object)
 
     assert result.equipment_id == 10
     assert result.equipment_type == EquipmentType.CONVEYOR
@@ -135,9 +126,7 @@ def test_create_conveyor_zone_info():
         300.0,
     )
 
-    assert result.warning_zone == pytest.approx(
-        (80.0, 80.0, 320.0, 320.0)
-    )
+    assert result.warning_zone == pytest.approx((80.0, 80.0, 320.0, 320.0))
 
 
 def test_create_forklift_zone_info():
@@ -146,9 +135,7 @@ def test_create_forklift_zone_info():
         class_name="forklift",
     )
 
-    result = create_forklift_zone_info(
-        tracked_object
-    )
+    result = create_forklift_zone_info(tracked_object)
 
     assert result.equipment_id == 20
     assert result.equipment_type == EquipmentType.FORKLIFT
@@ -160,9 +147,7 @@ def test_create_robot_arm_zone_info():
         class_name="robot_arm",
     )
 
-    result = create_robot_arm_zone_info(
-        tracked_object
-    )
+    result = create_robot_arm_zone_info(tracked_object)
 
     assert result.equipment_id == 30
     assert result.equipment_type == EquipmentType.ROBOT_ARM
@@ -176,10 +161,14 @@ def test_zone_manager():
         make_tracked_object(4, "robot_arm"),
     ]
 
-    frame_packet = SimpleNamespace(
-        timestamp=1234.5,
-        frame_index=100,
+    frame_packet = FramePacket(
         camera_id="cam_01",
+        frame=np.zeros((100, 100, 3), dtype=np.uint8),
+        frame_index=100,
+        timestamp=1234.5,
+        fps=30.0,
+        width=100,
+        height=100,
     )
 
     manager = ZoneManager()

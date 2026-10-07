@@ -1,6 +1,6 @@
 """Alert 상태를 camera tile 위에 badge/border로 그리는 모듈.
 
-EventManager가 만든 CameraAlertUpdate를 받아 어떻게 화면에 표시할지 담당한다. 
+EventManager가 만든 CameraAlertUpdate를 받아 어떻게 화면에 표시할지 담당한다.
 Alert 판정(hold/escalation/de-escalation)은 app/alerts/event_manager.py의
 책임이고, 이 모듈은 그 결과를 그대로 받아 그리기만 하는 stateless 함수들로 구성된다.
 """
