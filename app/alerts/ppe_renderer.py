@@ -33,11 +33,7 @@ def draw_ppe_overlay(
                 "CHECK" if name in assessment.pending_classes else "OK"
             )
             lines.append(f"{name}: {state}")
-        panel_width = max(cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0][0]
-                          for line in lines)
-        cv2.rectangle(frame, (x, y - 15),
-                      (min(width - 1, x + panel_width + 6), y + (len(lines) - 1) * 20 + 4),
-                      (25, 25, 25), -1)
+        # 배경을 채우지 않고 기존 글자 외곽선으로 가독성을 유지한다.
         for index, line in enumerate(lines):
             origin = (x + 3, y + index * 20)
             cv2.putText(frame, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)
