@@ -12,6 +12,7 @@ from app.alerts.models import (
     EventTransitionType,
 )
 from app.alerts.sound import LocalSoundPlayer
+from app.risk.ppe_risk import PPERiskAssessment
 from app.risk.models import RiskAssessment
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ class AlertManager:
     def update_camera(
         self,
         camera_id: str,
-        risk_assessments: list[RiskAssessment],
+        risk_assessments: list[RiskAssessment | PPERiskAssessment],
     ) -> CameraAlertUpdate:
         """한 camera의 이번 프레임 RiskAssessment로 Alert 상태를 갱신하고 반환한다."""
         return self._event_manager.update(

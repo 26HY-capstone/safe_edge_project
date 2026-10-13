@@ -1,6 +1,6 @@
 """프레임 단위로 영상 입력과 탐지기를 연결하는 모듈."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 from typing import Protocol
 
@@ -11,6 +11,8 @@ from app.video.video_source import FramePacket
 from app.inference.detector import BBox, Detector, Detection
 from app.tracking.tracker import Tracker, TrackedObject
 from app.tracking.trajectory import MotionSummary, TrajectoryAnalyzer
+from app.ppe.matcher import PPEMatcher, WorkerPPEStatus
+from app.risk.ppe_risk import PPERiskAssessment, PPERiskEvaluator
 from app.risk.models import RiskAssessment
 from app.risk.risk_engine import RiskEngine
 from app.zones.models import ZoneFrameResult
@@ -47,6 +49,8 @@ class ProcessedFrame:
     rendered_frame: np.ndarray | None
     zone_result: ZoneFrameResult
     risk_assessments: list[RiskAssessment]
+    ppe_statuses: dict[int, WorkerPPEStatus] = field(default_factory=dict)
+    ppe_risk_assessments: list[PPERiskAssessment] = field(default_factory=list)
 
 
 class FrameProcessor:
@@ -60,11 +64,15 @@ class FrameProcessor:
         trajectory_analyzer: TrajectoryAnalyzer | None = None,
         draw_bbox: bool = True,
         draw_metrics: bool = True,
+        ppe_matcher: PPEMatcher | None = None,
+        ppe_risk_evaluator: PPERiskEvaluator | None = None,
     ):
         # zone_manager: tracked_objects와 frame_packet으로 작업자/설비의
         # Zone(Warning/Critical) 진입 여부를 계산한다.
         # risk_engine: zone_manager의 결과를 받아 작업자-설비 조합별 위험등급을 판정한다.
         # 실행 파이프라인은 Tracking → Zone → Risk 순서를 항상 거친다.
+        self.ppe_risk_evaluator = ppe_risk_evaluator or PPERiskEvaluator()
+        self.ppe_matcher = ppe_matcher if ppe_matcher is not None else PPEMatcher()
         self.video_source = video_source
         self.detector = detector
         self.tracker = tracker
@@ -96,6 +104,8 @@ class FrameProcessor:
                 frame_packet=frame_packet,
             )
 
+        ppe_statuses = self.ppe_matcher.match(detections, tracked_objects)
+
         motion_summaries = {}
         if self.trajectory_analyzer is not None:
             motion_summaries = self.trajectory_analyzer.update(
@@ -112,6 +122,7 @@ class FrameProcessor:
         # Risk 판정: 위에서 계산한 Zone 분석 결과로 작업자-설비 조합별 위험등급을 계산한다.
         # 작업자 또는 설비가 없으면 빈 리스트를 반환한다.
         risk_assessments = self.risk_engine.evaluate(zone_result)
+        ppe_risk_assessments = self.ppe_risk_evaluator.evaluate(ppe_statuses, frame_packet)
 
         inference_latency_ms = (
             inference_end - inference_start
@@ -170,6 +181,8 @@ class FrameProcessor:
             rendered_frame=rendered_frame,
             zone_result=zone_result,
             risk_assessments=risk_assessments,
+            ppe_statuses=ppe_statuses,
+            ppe_risk_assessments=ppe_risk_assessments,
         )
 
     def _draw_bboxes(
