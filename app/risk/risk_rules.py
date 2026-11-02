@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from app.risk.models import RiskLevel
-from app.zones.geometry import is_point_in_bbox
-from app.zones.models import EquipmentZoneInfo, WorkerZoneInfo
+from app.zones.geometry import is_bbox_in_bbox, is_point_in_bbox
+from app.zones.models import EquipmentType, EquipmentZoneInfo, WorkerZoneInfo
 
 
 def determine_risk_level(worker: WorkerZoneInfo, equipment: EquipmentZoneInfo) -> RiskLevel:
     """
     작업자 한 명과 설비 하나 사이의 위험등급을 판정한다.
 
-    판정 기준점은 작업자 bbox의 bottom_center이며,
+    지게차 bbox에 완전히 포함된 작업자는 해당 지게차에 대해 NORMAL로 판정한다.
+    나머지 판정 기준점은 작업자 bbox의 bottom_center이며,
     Critical Zone이 Warning Zone 내부에 있으므로 먼저 검사한다.
 
     설비 작동 여부에 따라 같은 Zone이라도 위험등급이 한 단계씩 달라진다.
@@ -20,6 +21,11 @@ def determine_risk_level(worker: WorkerZoneInfo, equipment: EquipmentZoneInfo) -
     설비 정지         NORMAL      NORMAL         WARNING
     설비 작동         NORMAL      WARNING        CRITICAL
     """
+
+    if equipment.equipment_type == EquipmentType.FORKLIFT and is_bbox_in_bbox(
+        worker.person_bbox, equipment.equipment_bbox
+    ):
+        return RiskLevel.NORMAL
 
     # Critical Zone 내부인지 먼저 확인한다.
     if is_point_in_bbox(worker.bottom_center, equipment.critical_zone):

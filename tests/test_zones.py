@@ -7,7 +7,7 @@ from app.video.video_source import FramePacket
 from app.tracking.tracker import TrackedObject
 from app.zones.conveyor import create_conveyor_zone_info
 from app.zones.forklift import create_forklift_zone_info
-from app.zones.geometry import is_point_in_bbox, scale_bbox
+from app.zones.geometry import is_bbox_in_bbox, is_point_in_bbox, scale_bbox
 from app.zones.models import EquipmentType
 from app.zones.robot_arm import create_robot_arm_zone_info
 from app.zones.worker_zone import (
@@ -184,3 +184,20 @@ def test_zone_manager():
 
     assert len(result.workers) == 1
     assert len(result.equipments) == 3
+
+
+@pytest.mark.parametrize(
+    "inner,expected",
+    [
+        ((120, 120, 280, 280), True),
+        ((100, 100, 300, 300), True),
+        ((99, 120, 280, 280), False),
+        ((120, 120, 301, 280), False),
+        ((120, 99, 280, 280), False),
+        ((120, 120, 280, 301), False),
+        ((400, 400, 500, 500), False),
+        ((99.9, 120, 280, 280), False),
+    ],
+)
+def test_is_bbox_in_bbox(inner, expected):
+    assert is_bbox_in_bbox(inner, (100, 100, 300, 300)) is expected

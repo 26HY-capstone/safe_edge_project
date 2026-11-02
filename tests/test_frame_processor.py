@@ -1,6 +1,9 @@
 """프레임 처리 단계에서 detection과 tracking 연결을 검증하는 테스트."""
 
 import numpy as np
+import pytest
+
+from app.alerts.event_manager import EventManager, RiskEventManager
 
 from app.inference.detector import Detection, Detector
 from app.risk.models import RiskLevel
@@ -46,9 +49,11 @@ class _SequenceDetector(Detector):
 class _WorkerAndForkliftDetector(Detector):
     """Zone/Risk 연결을 검증하기 위해 작업자 1명과 지게차 1대를 함께 탐지하는 fake detector.
 
-    작업자 bbox의 bottom_center가 지게차 bbox(=critical_zone) 내부에 들어오도록
-    좌표를 구성해, ZoneManager와 RiskEngine이 실제로 CRITICAL을 계산하는지 확인한다.
+    사람 bbox를 주입해 탑승자와 외부 작업자의 Zone/Risk 연결을 검증한다.
     """
+
+    def __init__(self, person_bbox=(180.0, 150.0, 220.0, 250.0)):
+        self.person_bbox = person_bbox
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
         self.validate_frame(frame)
@@ -63,7 +68,7 @@ class _WorkerAndForkliftDetector(Detector):
                 class_id=1,
                 class_name="person",
                 confidence=0.9,
-                bbox=(180.0, 150.0, 220.0, 250.0),
+                bbox=self.person_bbox,
             ),
         ]
 
@@ -148,13 +153,24 @@ def test_frame_processor_returns_motion_summaries() -> None:
     assert second_frame.motion_summaries[1].speed_px_per_sec == 3.0
 
 
-def test_frame_processor_generates_zone_result_and_risk_assessments() -> None:
+@pytest.mark.parametrize(
+    "person_bbox,expected",
+    [
+        ((180.0, 150.0, 220.0, 250.0), RiskLevel.NORMAL),
+        ((100.0, 100.0, 300.0, 300.0), RiskLevel.NORMAL),
+        ((99.0, 150.0, 220.0, 250.0), RiskLevel.CRITICAL),
+        ((180.0, 150.0, 301.0, 250.0), RiskLevel.CRITICAL),
+        ((180.0, 99.0, 220.0, 250.0), RiskLevel.CRITICAL),
+        ((180.0, 150.0, 220.0, 301.0), RiskLevel.WARNING),
+    ],
+)
+def test_frame_processor_generates_zone_result_and_risk_assessments(person_bbox, expected):
     """Tracking → Zone → Risk 필수 흐름을 거쳐 ZoneFrameResult와
     RiskAssessment가 실제로 생성돼야 한다."""
 
     processor = FrameProcessor(
-        video_source=_FrameSource(),
-        detector=_WorkerAndForkliftDetector(),
+        video_source=_FrameSource(frame_size=400),
+        detector=_WorkerAndForkliftDetector(person_bbox),
         tracker=SimpleTracker(),
         zone_manager=ZoneManager(),
         risk_engine=RiskEngine(),
@@ -170,7 +186,14 @@ def test_frame_processor_generates_zone_result_and_risk_assessments() -> None:
     assert len(processed_frame.zone_result.equipments) == 1
 
     assert len(processed_frame.risk_assessments) == 1
-    assert processed_frame.risk_assessments[0].risk_level == RiskLevel.CRITICAL
+    assert processed_frame.risk_assessments[0].risk_level == expected
+
+    alert = EventManager().update("test-camera", processed_frame.risk_assessments)
+    assert alert.current_level == expected
+    transitions = RiskEventManager().process(
+        processed_frame.zone_result, processed_frame.risk_assessments
+    )
+    assert len(transitions) == (0 if expected == RiskLevel.NORMAL else 1)
 
 
 def test_frame_processor_zone_result_is_empty_without_detections() -> None:

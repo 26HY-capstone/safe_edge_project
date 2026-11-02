@@ -11,6 +11,13 @@ def is_point_in_bbox(point: Point, bbox: BBox) -> bool:
     return x1 <= x <= x2 and y1 <= y <= y2
 
 
+def is_bbox_in_bbox(inner: BBox, outer: BBox) -> bool:
+    """inner bbox 전체가 outer 내부 또는 경계에 포함되는지 판정한다."""
+    x1, y1, x2, y2 = inner
+    outer_x1, outer_y1, outer_x2, outer_y2 = outer
+    return outer_x1 <= x1 and outer_y1 <= y1 and x2 <= outer_x2 and y2 <= outer_y2
+
+
 def scale_bbox(bbox: BBox, scale: float) -> BBox:
     """Bounding Box 중심을 기준으로 폭과 높이를 지정한 배율만큼 확장한다."""
     if scale <= 0:
