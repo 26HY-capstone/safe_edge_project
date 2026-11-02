@@ -1,5 +1,9 @@
 """위험 규칙과 위험등급 계산을 검증하는 테스트."""
 
+from dataclasses import replace
+
+import pytest
+
 from app.risk.models import RiskAssessment, RiskLevel
 from app.risk.risk_engine import RiskEngine
 from app.risk.risk_rules import determine_risk_level
@@ -8,10 +12,11 @@ from app.zones.models import EquipmentType, EquipmentZoneInfo, WorkerZoneInfo, Z
 
 
 def _worker(person_id: int, bottom_center: tuple[float, float]) -> WorkerZoneInfo:
+    # 기존 위험도 검증용 외부 작업자: Critical Zone 위로 bbox가 돌출된다.
     x, y = bottom_center
     return WorkerZoneInfo(
         person_id=person_id,
-        person_bbox=(x - 5.0, y - 10.0, x + 5.0, y),
+        person_bbox=(x - 5.0, y - 30.0, x + 5.0, y),
         bottom_center=bottom_center,
     )
 
@@ -320,3 +325,58 @@ def test_risk_engine_maps_person_and_equipment_identity_per_combination() -> Non
 
     assert by_pair[(2, 20)].risk_level == RiskLevel.NORMAL
     assert by_pair[(2, 20)].equipment_type == EquipmentType.ROBOT_ARM
+
+
+@pytest.mark.parametrize("is_active", [True, False])
+@pytest.mark.parametrize(
+    "bbox,active_level",
+    [
+        ((44.0, 44.0, 56.0, 56.0), RiskLevel.NORMAL),
+        ((40.0, 40.0, 60.0, 60.0), RiskLevel.NORMAL),
+        ((39.0, 44.0, 56.0, 56.0), RiskLevel.CRITICAL),
+        ((44.0, 44.0, 61.0, 56.0), RiskLevel.CRITICAL),
+        ((44.0, 39.0, 56.0, 56.0), RiskLevel.CRITICAL),
+        ((44.0, 44.0, 56.0, 61.0), RiskLevel.WARNING),
+    ],
+    ids=["inside", "boundary", "left-1px", "right-1px", "top-1px", "bottom-1px"],
+)
+def test_forklift_occupant_requires_full_bbox_containment(bbox, active_level, is_active):
+    """중심이 내부여도 한쪽이 돌출되면 기존 Zone 위험도를 적용한다."""
+    worker = WorkerZoneInfo(1, bbox, ((bbox[0] + bbox[2]) / 2, bbox[3]))
+    equipment = _equipment(10, _WARNING_ZONE, _CRITICAL_ZONE, is_active)
+    expected = active_level
+    if not is_active:
+        expected = {
+            RiskLevel.NORMAL: RiskLevel.NORMAL,
+            RiskLevel.WARNING: RiskLevel.NORMAL,
+            RiskLevel.CRITICAL: RiskLevel.WARNING,
+        }[active_level]
+    assert determine_risk_level(worker, equipment) == expected
+
+
+@pytest.mark.parametrize("equipment_type", [EquipmentType.CONVEYOR, EquipmentType.ROBOT_ARM])
+@pytest.mark.parametrize("is_active", [True, False])
+def test_contained_worker_still_at_risk_for_other_equipment(equipment_type, is_active):
+    worker = WorkerZoneInfo(1, (44.0, 44.0, 56.0, 56.0), (50.0, 56.0))
+    equipment = _equipment(10, _WARNING_ZONE, _CRITICAL_ZONE, is_active, equipment_type)
+    assert determine_risk_level(worker, equipment) == (
+        RiskLevel.CRITICAL if is_active else RiskLevel.WARNING
+    )
+
+
+def test_occupant_filter_uses_equipment_bbox_not_expanded_critical_zone():
+    worker = WorkerZoneInfo(1, (39.0, 44.0, 56.0, 56.0), (47.5, 56.0))
+    equipment = _equipment(10, _WARNING_ZONE, _CRITICAL_ZONE, True)
+    equipment = replace(equipment, critical_zone=(30.0, 30.0, 70.0, 70.0))
+    assert determine_risk_level(worker, equipment) == RiskLevel.CRITICAL
+
+
+def test_occupant_is_exempt_only_for_containing_forklift():
+    worker = WorkerZoneInfo(1, (44.0, 44.0, 56.0, 56.0), (50.0, 56.0))
+    containing = _equipment(10, _WARNING_ZONE, _CRITICAL_ZONE, True)
+    nearby = _equipment(20, _WARNING_ZONE, (48.0, 40.0, 68.0, 60.0), True)
+    frame = ZoneFrameResult(12.5, 7, "cam_02", [worker], [containing, nearby])
+    assessments = RiskEngine().evaluate(frame)
+    assert [(a.equipment_id, a.risk_level) for a in assessments] == [
+        (10, RiskLevel.NORMAL), (20, RiskLevel.CRITICAL)
+    ]

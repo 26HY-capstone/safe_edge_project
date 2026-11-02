@@ -407,6 +407,16 @@ AND Worker close to Forklift
 THEN Risk = WARNING / CRITICAL
 ```
 
+지게차 탑승자 근접 알림 제외 규칙:
+- person bbox 전체가 해당 forklift의 원본 equipment bbox 내부 또는 경계에
+  포함될 때만 탑승자로 간주하고 해당 조합을 NORMAL로 반환한다.
+- 좌/우/상/하 어느 방향이든 1px이라도 돌출되면 기존 bottom-center 기반
+  WARNING/CRITICAL 및 설비 작동 여부 규칙을 적용한다. 중심점만으로 판정하지 않는다.
+- 다른 지게차·컨베이어·로봇팔과의 위험 판정 및 별도 PPE 판정은 유지한다.
+- geometry의 포함 검사를 Risk Rule에서 기존 bbox로 수행한다. 프레임별
+  작업자-지게차 조합당 상수 시간 비교이며 추가 추론·I/O·설정은 없다.
+  기존 이벤트 종료 유예와 cooldown은 유지한다.
+
 위험등급:
 
 - NORMAL
