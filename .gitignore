@@ -87,3 +87,26 @@ data/events.db
 
 # local report
 reports/
+
+# Datasets
+datasets/
+data/datasets/
+
+# Model weights / exported models
+*.pt
+*.onnx
+*.engine
+
+# SAHI experiment outputs
+experiments/sahi/outputs/
+experiments/sahi/runs/
+experiments/sahi/predictions/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
