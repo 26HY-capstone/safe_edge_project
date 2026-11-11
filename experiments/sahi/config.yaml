@@ -1,0 +1,11 @@
+# SAHI 실험의 slice 기본값. run_sahi.py/run_hybrid.py의 --config로 넘기면 이 값을
+# 기본값으로 쓰고, 각 CLI 인자(--slice-size/--overlap 등)가 주어지면 그 값이 우선한다.
+#
+# 절대경로나 특정 데이터셋 이름은 이 파일에 넣지 않는다. model/images/labels/output
+# 경로는 항상 실행 시 CLI에서 받는다(팀원마다 데이터 위치가 다르기 때문).
+
+slice:
+  width: 640
+  height: 640
+  overlap_width_ratio: 0.2
+  overlap_height_ratio: 0.2

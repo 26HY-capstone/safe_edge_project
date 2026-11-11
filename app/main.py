@@ -38,8 +38,8 @@ DEFAULT_SAMPLE_DIR = PROJECT_ROOT / "data" / "samples" / "forklift_human_nearmis
 # cam_03(ceiling)/cam_04(eye)에 쓸 샘플 영상을 고정하고 싶을 때만 정수로 지정한다.
 # None이면 실행마다 무작위로 run/ceiling/eye가 선택된다. 아래의 None = 값을 바꿔가며 실행해 터미널의
 # "[sample video] cam_03: ..." 출력으로 원하는 파일이 나오는 seed를 찾으면 된다.
-# 현재 테스트 가능한 seed 번호: 4, 7, 15 (15번 이후 미확인. 확인 필요.)
-SAMPLE_VIDEO_SEED: int | None = 15
+# 현재 테스트 가능한 seed 번호: 4, 7, 15, 23 (25번 이후 미확인. 확인 필요.)
+SAMPLE_VIDEO_SEED: int | None = 25
 MODEL_CONFIG_PATH = PROJECT_ROOT / "config" / "model.yaml"
 SYSTEM_CONFIG_PATH = PROJECT_ROOT / "config" / "system.yaml"
 
